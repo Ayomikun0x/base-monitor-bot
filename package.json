@@ -1,0 +1,19 @@
+{
+  "name": "base-token-monitor-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for monitoring Base chain token events",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.64.0",
+    "ethers": "^6.13.0",
+    "dotenv": "^16.4.5",
+    "axios": "^1.7.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  }
+}
