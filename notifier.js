@@ -30,11 +30,10 @@ async function sendAlert(message, { tokenAddress, silent = false } = {}) {
   }
 }
 
-function alertNewToken({ name, symbol, address, deployer, txHash, dex, totalSupply }) {
+function alertNewToken({ name, symbol, address, deployer, txHash, dex }) {
   return sendAlert(
     `🆕 <b>NEW TOKEN</b>\n\n` +
     `<b>${name}</b>  <code>$${symbol}</code>  ·  ${dex}\n\n` +
-    `📦 Supply    ${formatNumber(totalSupply)} ${symbol}\n` +
     `👤 Deployer  <a href="https://basescan.org/address/${deployer}">${shortAddr(deployer)}</a>\n` +
     `📍 Contract  <code>${address}</code>\n\n` +
     `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${address}">GMGN</a>  ·  <a href="https://basescan.org/token/${address}">Basescan</a>`,
@@ -58,14 +57,12 @@ function alertLiquidityAdded({ name, symbol, tokenAddress, provider, baseAmount,
   );
 }
 
-function alertFirstBuy({ name, symbol, tokenAddress, buyer, amountIn, baseSymbol, amountOut, valueUSD, txHash, price, mcap }) {
+function alertFirstBuy({ name, symbol, tokenAddress, buyer, amountIn, baseSymbol, amountOut, valueUSD, txHash }) {
   return sendAlert(
     `🟢 <b>FIRST BUY</b>\n\n` +
     `<b>${name}</b>  <code>$${symbol}</code>  ·  Base\n\n` +
     `💰 Spent     <b>${amountIn} ${baseSymbol}</b>  (~$${valueUSD})\n` +
-    `🛒 Got       ${formatNumber(amountOut)} ${symbol}\n` +
-    `💲 Price     <b>$${price}</b>\n` +
-    `📊 MCap      <b>$${formatNumber(mcap)}</b>\n\n` +
+    `🛒 Got       ${formatNumber(amountOut)} ${symbol}\n\n` +
     `👛 Wallet    <a href="https://basescan.org/address/${buyer}">${shortAddr(buyer)}</a>  ·  <a href="https://gmgn.ai/base/address/${buyer}">GMGN</a>\n` +
     `📍 Contract  <code>${tokenAddress}</code>\n` +
     `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${tokenAddress}">GMGN Chart</a>`,
@@ -73,14 +70,12 @@ function alertFirstBuy({ name, symbol, tokenAddress, buyer, amountIn, baseSymbol
   );
 }
 
-function alertLiquidityWarning({ name, symbol, tokenAddress, removalPct, provider, txHash, price, mcap }) {
+function alertLiquidityWarning({ name, symbol, tokenAddress, removalPct, provider, txHash }) {
   return sendAlert(
     `⚠️ <b>RUG WARNING</b>\n\n` +
     `<b>${name}</b>  <code>$${symbol}</code>  ·  Base\n\n` +
     `🚨 Removing  <b>${removalPct}%</b> of liquidity!\n` +
     `⚡ Act fast!\n\n` +
-    `💲 Price     <b>$${price}</b>\n` +
-    `📊 MCap      <b>$${formatNumber(mcap)}</b>\n\n` +
     `👛 Wallet    <a href="https://basescan.org/address/${provider}">${shortAddr(provider)}</a>  ·  <a href="https://gmgn.ai/base/address/${provider}">GMGN</a>\n` +
     `📍 Contract  <code>${tokenAddress}</code>\n` +
     `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${tokenAddress}">GMGN Chart</a>`,
@@ -88,18 +83,30 @@ function alertLiquidityWarning({ name, symbol, tokenAddress, removalPct, provide
   );
 }
 
-function alertLiquidityRemoved({ name, symbol, tokenAddress, provider, baseAmount, baseSymbol, tokenAmount, removedPct, txHash, price, mcap }) {
+function alertLiquidityRemoved({ name, symbol, tokenAddress, provider, baseAmount, baseSymbol, tokenAmount, removedPct, txHash }) {
   return sendAlert(
     `🔴 <b>LIQUIDITY REMOVED</b>\n\n` +
     `<b>${name}</b>  <code>$${symbol}</code>  ·  Base\n\n` +
     `💸 Pulled    <b>${baseAmount} ${baseSymbol}</b>\n` +
     `🪙 Tokens    ${formatNumber(tokenAmount)} ${symbol}\n` +
-    `📉 Removed   <b>${removedPct}%</b> of pool\n` +
-    `💲 Price     <b>$${price}</b>\n` +
-    `📊 MCap      <b>$${formatNumber(mcap)}</b>\n\n` +
+    `📉 Removed   <b>${removedPct}%</b> of pool\n\n` +
     `👛 Wallet    <a href="https://basescan.org/address/${provider}">${shortAddr(provider)}</a>  ·  <a href="https://gmgn.ai/base/address/${provider}">GMGN</a>\n` +
     `📍 Contract  <code>${tokenAddress}</code>\n` +
     `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${tokenAddress}">GMGN Chart</a>`,
+    { tokenAddress }
+  );
+}
+
+function alertPriceMilestone({ name, symbol, tokenAddress, gainPct, currentPrice, fromPrice }) {
+  const emoji = gainPct >= 200 ? "🚀" : gainPct >= 100 ? "💎" : "📈";
+  return sendAlert(
+    `${emoji} <b>${gainPct}% GAIN!</b>\n\n` +
+    `<b>${name}</b>  <code>$${symbol}</code>\n\n` +
+    `📈 Gain      <b>+${gainPct}%</b> since first buy\n` +
+    `💲 Now       <b>$${currentPrice}</b>\n` +
+    `🏁 Started   $${fromPrice}\n\n` +
+    `📍 Contract  <code>${tokenAddress}</code>\n` +
+    `🔗 <a href="https://gmgn.ai/base/token/${tokenAddress}">GMGN Chart</a>`,
     { tokenAddress }
   );
 }
@@ -108,8 +115,9 @@ function alertStartup(watchingFactories) {
   return sendAlert(
     `🤖 <b>Base Token Monitor — ONLINE</b>\n\n` +
     `📡 Watching ${watchingFactories} DEX factories\n` +
-    `✅ ETH & USDC pairs  ·  Min liq $5,000\n` +
+    `✅ ETH & USDC pairs  ·  No min liquidity\n` +
     `⚠️ Any liquidity removal = instant alert\n` +
+    `📈 Price milestones: 50%, 100%, 150%, 200%+\n` +
     `⏰ ${new Date().toUTCString()}`
   );
 }
@@ -131,5 +139,6 @@ function formatNumber(n) {
 module.exports = {
   initBot, sendAlert, alertNewToken, alertFirstBuy,
   alertLiquidityAdded, alertLiquidityWarning,
-  alertLiquidityRemoved, alertStartup, shortAddr, formatNumber,
+  alertLiquidityRemoved, alertPriceMilestone,
+  alertStartup, shortAddr, formatNumber,
 };
