@@ -47,9 +47,9 @@ function alertLiquidityAdded({ name, symbol, tokenAddress, provider, baseAmount,
     `<b>${name}</b>  <code>$${symbol}</code>  ·  ${dex}\n\n` +
     `💵 Added     <b>${baseAmount} ${baseSymbol}</b>\n` +
     `🪙 Tokens    ${formatNumber(tokenAmount)} ${symbol}\n` +
-    `🏊 Pool      ~$${formatNumber(totalLiqUSD)}\n` +
+    `🏊 Pool      ~$${totalLiqUSD}\n` +
     `💲 Price     <b>$${price}</b>\n` +
-    `📊 MCap      <b>$${formatNumber(mcap)}</b>\n\n` +
+    `📊 MCap      <b>$${mcap}</b>\n\n` +
     `👛 Wallet    <a href="https://basescan.org/address/${provider}">${shortAddr(provider)}</a>  ·  <a href="https://gmgn.ai/base/address/${provider}">GMGN</a>\n` +
     `📍 Contract  <code>${tokenAddress}</code>\n` +
     `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${tokenAddress}">GMGN Chart</a>`,
@@ -132,8 +132,7 @@ function formatNumber(n) {
   if (isNaN(num)) return String(n);
   if (num >= 1e9) return (num / 1e9).toFixed(2) + "B";
   if (num >= 1e6) return (num / 1e6).toFixed(2) + "M";
-  if (num >= 1e3) return (num / 1e3).toFixed(2) + "K";
-  return num.toFixed(2);
+  return num.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
 module.exports = {
