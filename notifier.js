@@ -49,7 +49,8 @@ function alertLiquidityAdded({ name, symbol, tokenAddress, provider, baseAmount,
     `🪙 Tokens    ${formatNumber(tokenAmount)} ${symbol}\n` +
     `🏊 Pool      ~$${totalLiqUSD}\n` +
     `💲 Price     <b>$${price}</b>\n` +
-    `📊 MCap      <b>$${mcap}</b>\n\n` +
+    `📊 MCap      <b>$${mcap}</b>\n` +
+    `🔐 LP         ${lpStatus}\n\n` +
     `👛 Wallet    <a href="https://basescan.org/address/${provider}">${shortAddr(provider)}</a>  ·  <a href="https://gmgn.ai/base/address/${provider}">GMGN</a>\n` +
     `📍 Contract  <code>${tokenAddress}</code>\n` +
     `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${tokenAddress}">GMGN Chart</a>`,
