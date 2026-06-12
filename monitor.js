@@ -22,80 +22,20 @@ const {
 
 const { getTokenInfo } = require("./tokenInfo");
 const { getEthPriceUSD } = require("./price");
+const { checkLPLock, checkHoneypot, checkDeployerHistory } = require("./safety");
 
-const firstBuyDone        = new Set();
-const liquiditySnapshots  = new Map();
-const priceTrackers       = new Map();
-const qualifiedTokens     = new Set();
-const deployerMap         = new Map();
-const dexMap              = new Map();
+const firstBuyDone       = new Set();
+const liquiditySnapshots = new Map();
+const priceTrackers      = new Map();
+const qualifiedTokens    = new Set();
+const deployerMap        = new Map();
+const dexMap             = new Map();
+const liquidityAddedTime = new Map();
 
-const MILESTONES          = [50, 100, 150, 200, 300, 500, 1000];
-const WARN_THRESHOLD      = 1;
-const MIN_LIQ_USD         = 5000;
-
-// Known LP locker contracts on Base
-const LP_LOCKERS = {
-  "0x663a5c229c09b049e36dcc11a9b0d4a8eb9db214": "Unicrypt",
-  "0xdba68f07d1b7ca219f78ae8582da0548dd8f694a": "Team Finance",
-  "0x71b53b55dC52a8b0A2A7F4b9c5DbdA94c66a21C": "Mudra",
-  "0x000000000000000000000000000000000000dead": "Burned 🔥",
-  "0x0000000000000000000000000000000000000000": "Burned 🔥",
-};
-
-// Check if LP tokens are locked after liquidity is added
-async function checkLPLock(provider, pairAddress, txHash) {
-  try {
-    await new Promise(r => setTimeout(r, 5000)); // wait 5s for lock tx
-
-    const receipt = await provider.getTransactionReceipt(txHash);
-    if (!receipt) return "🔓 Unlocked";
-
-    // Check if LP tokens were transferred to a known locker
-    const lpInterface = new ethers.Interface([
-      "event Transfer(address indexed from, address indexed to, uint256 value)"
-    ]);
-
-    for (const log of receipt.logs) {
-      try {
-        const parsed = lpInterface.parseLog(log);
-        if (parsed && parsed.name === "Transfer") {
-          const to = parsed.args.to.toLowerCase();
-          for (const [addr, name] of Object.entries(LP_LOCKERS)) {
-            if (to === addr.toLowerCase()) {
-              return `🔒 Locked · ${name}`;
-            }
-          }
-        }
-      } catch {}
-    }
-
-    // Check blocks after for lock transaction
-    const block = await provider.getBlock(receipt.blockNumber);
-    if (!block) return "🔓 Unlocked";
-
-    // Scan next 3 blocks for lock tx
-    for (let i = 1; i <= 3; i++) {
-      try {
-        const nextBlock = await provider.getBlock(receipt.blockNumber + i, true);
-        if (!nextBlock || !nextBlock.transactions) continue;
-        for (const tx of nextBlock.transactions) {
-          if (!tx.to) continue;
-          const to = tx.to.toLowerCase();
-          for (const [addr, name] of Object.entries(LP_LOCKERS)) {
-            if (to === addr.toLowerCase()) {
-              return `🔒 Locked · ${name}`;
-            }
-          }
-        }
-      } catch {}
-    }
-
-    return "🔓 Unlocked ⚠️";
-  } catch {
-    return "❓ Unknown";
-  }
-}
+const MILESTONES      = [50, 100, 150, 200, 300, 500, 1000];
+const WARN_THRESHOLD  = 1;
+const MIN_LIQ_USD     = Number(process.env.MIN_LIQUIDITY_USD || 2000);
+const SNIPE_WINDOW_MS = 60000;
 
 function getNewToken(token0, token1) {
   const t0 = token0.toLowerCase();
@@ -117,11 +57,8 @@ function isEthBase(baseToken) {
 
 function fmtUnits(raw, decimals = 18) {
   try {
-    const bd = BigInt(raw.toString());
-    return parseFloat(ethers.formatUnits(bd, decimals));
-  } catch {
-    return 0;
-  }
+    return parseFloat(ethers.formatUnits(BigInt(raw.toString()), decimals));
+  } catch { return 0; }
 }
 
 function formatPrice(p) {
@@ -141,22 +78,22 @@ function formatMcap(n) {
   return n.toLocaleString("en-US", { maximumFractionDigits: 0 });
 }
 
-function calcPrice(baseAmountFloat, baseSymbol, tokenAmountFloat, ethPriceUSD) {
-  if (!tokenAmountFloat || tokenAmountFloat === 0) return 0;
-  const baseUSD = baseSymbol === "ETH" ? baseAmountFloat * ethPriceUSD : baseAmountFloat;
-  return baseUSD / tokenAmountFloat;
+function calcPrice(baseFloat, baseSymbol, tokFloat, ethPrice) {
+  if (!tokFloat || tokFloat === 0) return 0;
+  const baseUSD = baseSymbol === "ETH" ? baseFloat * ethPrice : baseFloat;
+  return baseUSD / tokFloat;
 }
 
-async function checkPriceMilestone(tokenAddress, name, symbol, currentPriceFloat) {
+async function checkPriceMilestone(tokenAddress, name, symbol, currentPrice) {
   const tracker = priceTrackers.get(tokenAddress.toLowerCase());
-  if (!tracker || !tracker.firstBuyPrice || tracker.firstBuyPrice === 0) return;
-  const gainPct = ((currentPriceFloat - tracker.firstBuyPrice) / tracker.firstBuyPrice) * 100;
+  if (!tracker || !tracker.firstBuyPrice) return;
+  const gainPct = ((currentPrice - tracker.firstBuyPrice) / tracker.firstBuyPrice) * 100;
   for (const milestone of MILESTONES) {
     if (gainPct >= milestone && tracker.nextMilestone <= milestone) {
       await alertPriceMilestone({
         name, symbol, tokenAddress,
         gainPct: milestone,
-        currentPrice: formatPrice(currentPriceFloat),
+        currentPrice: formatPrice(currentPrice),
         fromPrice: formatPrice(tracker.firstBuyPrice),
       });
       const nextIdx = MILESTONES.indexOf(milestone) + 1;
@@ -198,30 +135,52 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
 
       if (valueUSD < MIN_LIQ_USD) return;
 
+      if (!liquidityAddedTime.has(tokenKey)) {
+        liquidityAddedTime.set(tokenKey, Date.now());
+      }
+
       if (!qualifiedTokens.has(tokenKey)) {
         qualifiedTokens.add(tokenKey);
         const deployer = deployerMap.get(tokenKey) || "unknown";
         const dex      = dexMap.get(tokenKey) || dexName;
+
+        const [honeypot, deployerHistory, lpStatus] = await Promise.all([
+          checkHoneypot(newToken),
+          checkDeployerHistory(deployer),
+          checkLPLock(provider, pairAddress, txHash),
+        ]);
+
         await alertNewToken({
           name: tokenInfo.name, symbol: tokenInfo.symbol,
           address: newToken, deployer, txHash, dex,
+          honeypot, deployerHistory,
+        });
+
+        await alertLiquidityAdded({
+          name: tokenInfo.name, symbol: tokenInfo.symbol,
+          tokenAddress: newToken, provider: sender,
+          baseAmount: baseFloat.toFixed(4), baseSymbol,
+          tokenAmount: tokFloat,
+          totalLiqUSD: valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 }),
+          txHash, dex: dexName,
+          price: formatPrice(priceFloat),
+          mcap: formatMcap(mcap),
+          lpStatus,
+        });
+      } else {
+        const lpStatus = await checkLPLock(provider, pairAddress, txHash);
+        await alertLiquidityAdded({
+          name: tokenInfo.name, symbol: tokenInfo.symbol,
+          tokenAddress: newToken, provider: sender,
+          baseAmount: baseFloat.toFixed(4), baseSymbol,
+          tokenAmount: tokFloat,
+          totalLiqUSD: valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 }),
+          txHash, dex: dexName,
+          price: formatPrice(priceFloat),
+          mcap: formatMcap(mcap),
+          lpStatus,
         });
       }
-
-      // Check LP lock status
-      const lpStatus = await checkLPLock(provider, pairAddress, txHash);
-
-      await alertLiquidityAdded({
-        name: tokenInfo.name, symbol: tokenInfo.symbol,
-        tokenAddress: newToken, provider: sender,
-        baseAmount: baseFloat.toFixed(4), baseSymbol,
-        tokenAmount: tokFloat,
-        totalLiqUSD: valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 }),
-        txHash, dex: dexName,
-        price: formatPrice(priceFloat),
-        mcap: formatMcap(mcap),
-        lpStatus,
-      });
     } catch (err) { console.error("Mint error:", err.message); }
   });
 
@@ -278,6 +237,10 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
       if (!firstBuyDone.has(tokenKey)) {
         firstBuyDone.add(tokenKey);
         priceTrackers.set(tokenKey, { firstBuyPrice: priceFloat, nextMilestone: MILESTONES[0] });
+
+        const liqTime = liquidityAddedTime.get(tokenKey) || 0;
+        const isSnipe = (Date.now() - liqTime) <= SNIPE_WINDOW_MS;
+
         await alertFirstBuy({
           name: tokenInfo.name, symbol: tokenInfo.symbol,
           tokenAddress: newToken, buyer: to,
@@ -285,12 +248,15 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
           amountOut: tokFloat,
           valueUSD: valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 }),
           txHash: event.log?.transactionHash || "unknown",
+          isSnipe,
         });
       } else {
         await checkPriceMilestone(newToken, tokenInfo.name, tokenInfo.symbol, priceFloat);
       }
     } catch (err) { console.error("Swap error:", err.message); }
   });
+
+  console.log("Watching pair: " + pairAddress + " (" + tokenInfo.symbol + "/" + baseSymbol + ")");
 }
 
 async function watchV2Factory(provider, factoryAddress, dexName) {
@@ -362,29 +328,52 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
 
       if (valueUSD < MIN_LIQ_USD) return;
 
+      if (!liquidityAddedTime.has(tokenKey)) {
+        liquidityAddedTime.set(tokenKey, Date.now());
+      }
+
       if (!qualifiedTokens.has(tokenKey)) {
         qualifiedTokens.add(tokenKey);
         const deployer = deployerMap.get(tokenKey) || "unknown";
         const dex      = dexMap.get(tokenKey) || dexName;
+
+        const [honeypot, deployerHistory, lpStatus] = await Promise.all([
+          checkHoneypot(newToken),
+          checkDeployerHistory(deployer),
+          checkLPLock(provider, poolAddress, txHash),
+        ]);
+
         await alertNewToken({
           name: tokenInfo.name, symbol: tokenInfo.symbol,
           address: newToken, deployer, txHash, dex,
+          honeypot, deployerHistory,
+        });
+
+        await alertLiquidityAdded({
+          name: tokenInfo.name, symbol: tokenInfo.symbol,
+          tokenAddress: newToken, provider: sender,
+          baseAmount: baseFloat.toFixed(4), baseSymbol,
+          tokenAmount: tokFloat,
+          totalLiqUSD: valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 }),
+          txHash, dex: dexName,
+          price: formatPrice(priceFloat),
+          mcap: formatMcap(mcap),
+          lpStatus,
+        });
+      } else {
+        const lpStatus = await checkLPLock(provider, poolAddress, txHash);
+        await alertLiquidityAdded({
+          name: tokenInfo.name, symbol: tokenInfo.symbol,
+          tokenAddress: newToken, provider: sender,
+          baseAmount: baseFloat.toFixed(4), baseSymbol,
+          tokenAmount: tokFloat,
+          totalLiqUSD: valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 }),
+          txHash, dex: dexName,
+          price: formatPrice(priceFloat),
+          mcap: formatMcap(mcap),
+          lpStatus,
         });
       }
-
-      const lpStatus = await checkLPLock(provider, poolAddress, txHash);
-
-      await alertLiquidityAdded({
-        name: tokenInfo.name, symbol: tokenInfo.symbol,
-        tokenAddress: newToken, provider: sender,
-        baseAmount: baseFloat.toFixed(4), baseSymbol,
-        tokenAmount: tokFloat,
-        totalLiqUSD: valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 }),
-        txHash, dex: dexName,
-        price: formatPrice(priceFloat),
-        mcap: formatMcap(mcap),
-        lpStatus,
-      });
     } catch (err) { console.error("V3 Mint error:", err.message); }
   });
 
@@ -432,6 +421,10 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
       if (!firstBuyDone.has(tokenKey)) {
         firstBuyDone.add(tokenKey);
         priceTrackers.set(tokenKey, { firstBuyPrice: priceFloat, nextMilestone: MILESTONES[0] });
+
+        const liqTime = liquidityAddedTime.get(tokenKey) || 0;
+        const isSnipe = (Date.now() - liqTime) <= SNIPE_WINDOW_MS;
+
         await alertFirstBuy({
           name: tokenInfo.name, symbol: tokenInfo.symbol,
           tokenAddress: newToken, buyer: recipient,
@@ -439,6 +432,7 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
           amountOut: tokFloat,
           valueUSD: valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 }),
           txHash: event.log?.transactionHash || "unknown",
+          isSnipe,
         });
       } else {
         await checkPriceMilestone(newToken, tokenInfo.name, tokenInfo.symbol, priceFloat);
