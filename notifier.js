@@ -30,18 +30,26 @@ async function sendAlert(message, { tokenAddress, silent = false } = {}) {
   }
 }
 
-function alertNewToken({ name, symbol, address, deployer, txHash, dex }) {
+function alertNewToken({ name, symbol, address, deployer, txHash, dex, deployerHistory, honeypot }) {
+  const hp = honeypot || {};
+  const hpLine = hp.status
+    ? `${hp.status}  Buy ${hp.buyTax}%  Sell ${hp.sellTax}%` +
+      (hp.flags && hp.flags.length ? `\n⚑  ${hp.flags.join(" · ")}` : "")
+    : "❓ Unknown";
+
   return sendAlert(
     `🆕 <b>NEW TOKEN</b>\n\n` +
     `<b>${name}</b>  <code>$${symbol}</code>  ·  ${dex}\n\n` +
+    `🍯 Safety    ${hpLine}\n` +
     `👤 Deployer  <a href="https://basescan.org/address/${deployer}">${shortAddr(deployer)}</a>\n` +
+    `📋 History   ${deployerHistory || "❓ Unknown"}\n` +
     `📍 Contract  <code>${address}</code>\n\n` +
     `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${address}">GMGN</a>  ·  <a href="https://basescan.org/token/${address}">Basescan</a>`,
     { tokenAddress: address }
   );
 }
 
-function alertLiquidityAdded({ name, symbol, tokenAddress, provider, baseAmount, baseSymbol, tokenAmount, totalLiqUSD, txHash, dex, price, mcap }) {
+function alertLiquidityAdded({ name, symbol, tokenAddress, provider, baseAmount, baseSymbol, tokenAmount, totalLiqUSD, txHash, dex, price, mcap, lpStatus }) {
   return sendAlert(
     `💧 <b>LIQUIDITY ADDED</b>\n\n` +
     `<b>${name}</b>  <code>$${symbol}</code>  ·  ${dex}\n\n` +
@@ -50,7 +58,7 @@ function alertLiquidityAdded({ name, symbol, tokenAddress, provider, baseAmount,
     `🏊 Pool      ~$${totalLiqUSD}\n` +
     `💲 Price     <b>$${price}</b>\n` +
     `📊 MCap      <b>$${mcap}</b>\n` +
-    `🔐 LP         ${lpStatus}\n\n` +
+    `🔐 LP        ${lpStatus || "❓ Checking..."}\n\n` +
     `👛 Wallet    <a href="https://basescan.org/address/${provider}">${shortAddr(provider)}</a>  ·  <a href="https://gmgn.ai/base/address/${provider}">GMGN</a>\n` +
     `📍 Contract  <code>${tokenAddress}</code>\n` +
     `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${tokenAddress}">GMGN Chart</a>`,
@@ -58,10 +66,12 @@ function alertLiquidityAdded({ name, symbol, tokenAddress, provider, baseAmount,
   );
 }
 
-function alertFirstBuy({ name, symbol, tokenAddress, buyer, amountIn, baseSymbol, amountOut, valueUSD, txHash }) {
+function alertFirstBuy({ name, symbol, tokenAddress, buyer, amountIn, baseSymbol, amountOut, valueUSD, txHash, isSnipe }) {
+  const snipeTag = isSnipe ? `\n⚡ <b>SNIPE DETECTED</b> — bought within 60s of liquidity!` : "";
   return sendAlert(
-    `🟢 <b>FIRST BUY</b>\n\n` +
-    `<b>${name}</b>  <code>$${symbol}</code>  ·  Base\n\n` +
+    `🟢 <b>FIRST BUY${isSnipe ? " ⚡" : ""}</b>\n\n` +
+    `<b>${name}</b>  <code>$${symbol}</code>  ·  Base` +
+    `${snipeTag}\n\n` +
     `💰 Spent     <b>${amountIn} ${baseSymbol}</b>  (~$${valueUSD})\n` +
     `🛒 Got       ${formatNumber(amountOut)} ${symbol}\n\n` +
     `👛 Wallet    <a href="https://basescan.org/address/${buyer}">${shortAddr(buyer)}</a>  ·  <a href="https://gmgn.ai/base/address/${buyer}">GMGN</a>\n` +
@@ -116,9 +126,11 @@ function alertStartup(watchingFactories) {
   return sendAlert(
     `🤖 <b>Base Token Monitor — ONLINE</b>\n\n` +
     `📡 Watching ${watchingFactories} DEX factories\n` +
-    `✅ ETH & USDC pairs  ·  No min liquidity\n` +
-    `⚠️ Any liquidity removal = instant alert\n` +
-    `📈 Price milestones: 50%, 100%, 150%, 200%+\n` +
+    `✅ ETH & USDC pairs  ·  Min liq $2,000\n` +
+    `🍯 Honeypot detection enabled\n` +
+    `🔐 LP lock detection enabled\n` +
+    `⚡ Snipe detection enabled\n` +
+    `📈 Price milestones: 50%, 100%, 200%+\n` +
     `⏰ ${new Date().toUTCString()}`
   );
 }
