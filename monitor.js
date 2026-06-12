@@ -34,6 +34,69 @@ const MILESTONES          = [50, 100, 150, 200, 300, 500, 1000];
 const WARN_THRESHOLD      = 1;
 const MIN_LIQ_USD         = 5000;
 
+// Known LP locker contracts on Base
+const LP_LOCKERS = {
+  "0x663a5c229c09b049e36dcc11a9b0d4a8eb9db214": "Unicrypt",
+  "0xdba68f07d1b7ca219f78ae8582da0548dd8f694a": "Team Finance",
+  "0x71b53b55dC52a8b0A2A7F4b9c5DbdA94c66a21C": "Mudra",
+  "0x000000000000000000000000000000000000dead": "Burned 🔥",
+  "0x0000000000000000000000000000000000000000": "Burned 🔥",
+};
+
+// Check if LP tokens are locked after liquidity is added
+async function checkLPLock(provider, pairAddress, txHash) {
+  try {
+    await new Promise(r => setTimeout(r, 5000)); // wait 5s for lock tx
+
+    const receipt = await provider.getTransactionReceipt(txHash);
+    if (!receipt) return "🔓 Unlocked";
+
+    // Check if LP tokens were transferred to a known locker
+    const lpInterface = new ethers.Interface([
+      "event Transfer(address indexed from, address indexed to, uint256 value)"
+    ]);
+
+    for (const log of receipt.logs) {
+      try {
+        const parsed = lpInterface.parseLog(log);
+        if (parsed && parsed.name === "Transfer") {
+          const to = parsed.args.to.toLowerCase();
+          for (const [addr, name] of Object.entries(LP_LOCKERS)) {
+            if (to === addr.toLowerCase()) {
+              return `🔒 Locked · ${name}`;
+            }
+          }
+        }
+      } catch {}
+    }
+
+    // Check blocks after for lock transaction
+    const block = await provider.getBlock(receipt.blockNumber);
+    if (!block) return "🔓 Unlocked";
+
+    // Scan next 3 blocks for lock tx
+    for (let i = 1; i <= 3; i++) {
+      try {
+        const nextBlock = await provider.getBlock(receipt.blockNumber + i, true);
+        if (!nextBlock || !nextBlock.transactions) continue;
+        for (const tx of nextBlock.transactions) {
+          if (!tx.to) continue;
+          const to = tx.to.toLowerCase();
+          for (const [addr, name] of Object.entries(LP_LOCKERS)) {
+            if (to === addr.toLowerCase()) {
+              return `🔒 Locked · ${name}`;
+            }
+          }
+        }
+      } catch {}
+    }
+
+    return "🔓 Unlocked ⚠️";
+  } catch {
+    return "❓ Unknown";
+  }
+}
+
 function getNewToken(token0, token1) {
   const t0 = token0.toLowerCase();
   const t1 = token1.toLowerCase();
@@ -145,6 +208,9 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
         });
       }
 
+      // Check LP lock status
+      const lpStatus = await checkLPLock(provider, pairAddress, txHash);
+
       await alertLiquidityAdded({
         name: tokenInfo.name, symbol: tokenInfo.symbol,
         tokenAddress: newToken, provider: sender,
@@ -154,6 +220,7 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
         txHash, dex: dexName,
         price: formatPrice(priceFloat),
         mcap: formatMcap(mcap),
+        lpStatus,
       });
     } catch (err) { console.error("Mint error:", err.message); }
   });
@@ -305,6 +372,8 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
         });
       }
 
+      const lpStatus = await checkLPLock(provider, poolAddress, txHash);
+
       await alertLiquidityAdded({
         name: tokenInfo.name, symbol: tokenInfo.symbol,
         tokenAddress: newToken, provider: sender,
@@ -314,6 +383,7 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
         txHash, dex: dexName,
         price: formatPrice(priceFloat),
         mcap: formatMcap(mcap),
+        lpStatus,
       });
     } catch (err) { console.error("V3 Mint error:", err.message); }
   });
