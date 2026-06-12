@@ -32,15 +32,14 @@ async function sendAlert(message, { tokenAddress, silent = false } = {}) {
 
 function alertNewToken({ name, symbol, address, deployer, txHash, dex, deployerHistory, honeypot }) {
   const hp = honeypot || {};
-  const hpLine = hp.status
-    ? `${hp.status}  Buy ${hp.buyTax}%  Sell ${hp.sellTax}%` +
-      (hp.flags && hp.flags.length ? `\n⚑  ${hp.flags.join(" · ")}` : "")
-    : "❓ Unknown";
+  const hpText = hp.status || "❓ Unknown";
+  const taxText = (hp.buyTax && hp.buyTax !== "?") ? `  Buy ${hp.buyTax}%  Sell ${hp.sellTax}%` : "";
+  const flagText = (hp.flags && hp.flags.length) ? `\n⚑  ${hp.flags.join(" · ")}` : "";
 
   return sendAlert(
     `🆕 <b>NEW TOKEN</b>\n\n` +
     `<b>${name}</b>  <code>$${symbol}</code>  ·  ${dex}\n\n` +
-    `🍯 Safety    ${hpLine}\n` +
+    `🍯 Safety    ${hpText}${taxText}${flagText}\n` +
     `👤 Deployer  <a href="https://basescan.org/address/${deployer}">${shortAddr(deployer)}</a>\n` +
     `📋 History   ${deployerHistory || "❓ Unknown"}\n` +
     `📍 Contract  <code>${address}</code>\n\n` +
@@ -49,7 +48,12 @@ function alertNewToken({ name, symbol, address, deployer, txHash, dex, deployerH
   );
 }
 
-function alertLiquidityAdded({ name, symbol, tokenAddress, provider, baseAmount, baseSymbol, tokenAmount, totalLiqUSD, txHash, dex, price, mcap, lpStatus }) {
+function alertLiquidityAdded({ name, symbol, tokenAddress, provider, baseAmount, baseSymbol, tokenAmount, totalLiqUSD, txHash, dex, price, mcap, lpStatus, honeypot, deployerHistory }) {
+  const hp = honeypot || {};
+  const hpText = hp.status ? `${hp.status}  Buy ${hp.buyTax || "?"}%  Sell ${hp.sellTax || "?"}%` : "";
+  const safetyLine = hpText ? `🍯 Safety    ${hpText}\n` : "";
+  const historyLine = deployerHistory ? `📋 History   ${deployerHistory}\n` : "";
+
   return sendAlert(
     `💧 <b>LIQUIDITY ADDED</b>\n\n` +
     `<b>${name}</b>  <code>$${symbol}</code>  ·  ${dex}\n\n` +
@@ -58,7 +62,9 @@ function alertLiquidityAdded({ name, symbol, tokenAddress, provider, baseAmount,
     `🏊 Pool      ~$${totalLiqUSD}\n` +
     `💲 Price     <b>$${price}</b>\n` +
     `📊 MCap      <b>$${mcap}</b>\n` +
-    `🔐 LP        ${lpStatus || "❓ Checking..."}\n\n` +
+    `🔐 LP        ${lpStatus || "❓ Unknown"}\n` +
+    `${safetyLine}` +
+    `${historyLine}\n` +
     `👛 Wallet    <a href="https://basescan.org/address/${provider}">${shortAddr(provider)}</a>  ·  <a href="https://gmgn.ai/base/address/${provider}">GMGN</a>\n` +
     `📍 Contract  <code>${tokenAddress}</code>\n` +
     `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${tokenAddress}">GMGN Chart</a>`,
