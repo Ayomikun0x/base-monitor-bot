@@ -23,11 +23,16 @@ const {
 const { getTokenInfo } = require("./tokenInfo");
 const { getEthPriceUSD } = require("./price");
 
-const firstBuyDone       = new Set();
-const liquiditySnapshots = new Map();
-const priceTrackers      = new Map();
-const MILESTONES         = [50, 100, 150, 200, 300, 500, 1000];
-const WARN_THRESHOLD     = 1;
+const firstBuyDone        = new Set();
+const liquiditySnapshots  = new Map();
+const priceTrackers       = new Map();
+const qualifiedTokens     = new Set();
+const deployerMap         = new Map();
+const dexMap              = new Map();
+
+const MILESTONES          = [50, 100, 150, 200, 300, 500, 1000];
+const WARN_THRESHOLD      = 1;
+const MIN_LIQ_USD         = 5000;
 
 function getNewToken(token0, token1) {
   const t0 = token0.toLowerCase();
@@ -82,9 +87,7 @@ function calcPrice(baseAmountFloat, baseSymbol, tokenAmountFloat, ethPriceUSD) {
 async function checkPriceMilestone(tokenAddress, name, symbol, currentPriceFloat) {
   const tracker = priceTrackers.get(tokenAddress.toLowerCase());
   if (!tracker || !tracker.firstBuyPrice || tracker.firstBuyPrice === 0) return;
-
   const gainPct = ((currentPriceFloat - tracker.firstBuyPrice) / tracker.firstBuyPrice) * 100;
-
   for (const milestone of MILESTONES) {
     if (gainPct >= milestone && tracker.nextMilestone <= milestone) {
       await alertPriceMilestone({
@@ -109,6 +112,7 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
   const baseSymbol   = getBaseSymbol(baseToken);
   const isEth        = isEthBase(baseToken);
   const baseDecimals = isEth ? 18 : 6;
+  const tokenKey     = newToken.toLowerCase();
   const pair         = new ethers.Contract(pairAddress, UNISWAP_V2_PAIR_ABI, provider);
   const tokenInfo    = await getTokenInfo(provider, newToken);
 
@@ -122,11 +126,24 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
       const valueUSD   = isEth ? baseFloat * ethPrice : baseFloat;
       const priceFloat = calcPrice(baseFloat, baseSymbol, tokFloat, ethPrice);
       const mcap       = priceFloat * (tokenInfo.totalSupply || 0);
+      const txHash     = event.log?.transactionHash || "unknown";
 
       try {
         const supply = await pair.totalSupply();
         liquiditySnapshots.set(pairAddress.toLowerCase(), supply);
       } catch {}
+
+      if (valueUSD < MIN_LIQ_USD) return;
+
+      if (!qualifiedTokens.has(tokenKey)) {
+        qualifiedTokens.add(tokenKey);
+        const deployer = deployerMap.get(tokenKey) || "unknown";
+        const dex      = dexMap.get(tokenKey) || dexName;
+        await alertNewToken({
+          name: tokenInfo.name, symbol: tokenInfo.symbol,
+          address: newToken, deployer, txHash, dex,
+        });
+      }
 
       await alertLiquidityAdded({
         name: tokenInfo.name, symbol: tokenInfo.symbol,
@@ -134,8 +151,7 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
         baseAmount: baseFloat.toFixed(4), baseSymbol,
         tokenAmount: tokFloat,
         totalLiqUSD: valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 }),
-        txHash: event.log?.transactionHash || "unknown",
-        dex: dexName,
+        txHash, dex: dexName,
         price: formatPrice(priceFloat),
         mcap: formatMcap(mcap),
       });
@@ -144,6 +160,7 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
 
   pair.on("Burn", async (sender, amount0, amount1, to, event) => {
     try {
+      if (!qualifiedTokens.has(tokenKey)) return;
       const baseRaw   = isToken0New ? amount1 : amount0;
       const tokRaw    = isToken0New ? amount0 : amount1;
       const baseFloat = fmtUnits(baseRaw, baseDecimals);
@@ -161,13 +178,13 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
         liquiditySnapshots.set(pairAddress.toLowerCase(), currentSupply);
       } catch {}
 
-      if (parseFloat(removedPct) >= WARN_THRESHOLD) {
-        await alertLiquidityWarning({
-          name: tokenInfo.name, symbol: tokenInfo.symbol,
-          tokenAddress: newToken, removalPct: removedPct,
-          provider: sender, txHash,
-        });
-      }
+      await alertLiquidityWarning({
+        name: tokenInfo.name, symbol: tokenInfo.symbol,
+        tokenAddress: newToken, removalPct: removedPct,
+        provider: sender, txHash,
+      });
+
+      await new Promise(r => setTimeout(r, 1000));
 
       await alertLiquidityRemoved({
         name: tokenInfo.name, symbol: tokenInfo.symbol,
@@ -180,7 +197,7 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
 
   pair.on("Swap", async (sender, amount0In, amount0Out, amount1In, amount1Out, to, event) => {
     try {
-      const tokenKey   = newToken.toLowerCase();
+      if (!qualifiedTokens.has(tokenKey)) return;
       const ethPrice   = await getEthPriceUSD();
       const baseIn     = isToken0New ? amount1In  : amount0In;
       const tokOut     = isToken0New ? amount0Out : amount1Out;
@@ -207,8 +224,6 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
       }
     } catch (err) { console.error("Swap error:", err.message); }
   });
-
-  console.log("Watching pair: " + pairAddress + " (" + tokenInfo.symbol + "/" + baseSymbol + ")");
 }
 
 async function watchV2Factory(provider, factoryAddress, dexName) {
@@ -218,18 +233,14 @@ async function watchV2Factory(provider, factoryAddress, dexName) {
       const result = getNewToken(token0, token1);
       if (!result) return;
       const { newToken } = result;
-      const tokenInfo = await getTokenInfo(provider, newToken);
+      const tokenKey = newToken.toLowerCase();
       let deployer = "unknown";
       try {
         const tx = await provider.getTransaction(event.log?.transactionHash);
         deployer = tx?.from || "unknown";
       } catch {}
-      await alertNewToken({
-        name: tokenInfo.name, symbol: tokenInfo.symbol,
-        address: newToken, deployer,
-        txHash: event.log?.transactionHash || "unknown",
-        dex: dexName,
-      });
+      deployerMap.set(tokenKey, deployer);
+      dexMap.set(tokenKey, dexName);
       await watchV2Pair(provider, pairAddress, token0, token1, dexName);
     } catch (err) { console.error("PairCreated error:", err.message); }
   });
@@ -243,18 +254,16 @@ async function watchV3Factory(provider, factoryAddress, dexName) {
       const result = getNewToken(token0, token1);
       if (!result) return;
       const { newToken } = result;
-      const tokenInfo = await getTokenInfo(provider, newToken);
+      const tokenKey = newToken.toLowerCase();
+      const fullDex  = dexName + " V3 (" + (Number(fee) / 10000) + "% fee)";
       let deployer = "unknown";
       try {
         const tx = await provider.getTransaction(event.log?.transactionHash);
         deployer = tx?.from || "unknown";
       } catch {}
-      await alertNewToken({
-        name: tokenInfo.name, symbol: tokenInfo.symbol,
-        address: newToken, deployer,
-        txHash: event.log?.transactionHash || "unknown",
-        dex: dexName + " V3 (" + (Number(fee) / 10000) + "% fee)",
-      });
+      deployerMap.set(tokenKey, deployer);
+      dexMap.set(tokenKey, fullDex);
+      const tokenInfo = await getTokenInfo(provider, newToken);
       watchV3Pool(provider, poolAddress, token0, token1, dexName, tokenInfo);
     } catch (err) { console.error("PoolCreated error:", err.message); }
   });
@@ -269,6 +278,7 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
   const baseSymbol   = getBaseSymbol(baseToken);
   const isEth        = isEthBase(baseToken);
   const baseDecimals = isEth ? 18 : 6;
+  const tokenKey     = newToken.toLowerCase();
   const pool         = new ethers.Contract(poolAddress, UNISWAP_V3_POOL_ABI, provider);
 
   pool.on("Mint", async (sender, owner, tL, tU, amount, amount0, amount1, event) => {
@@ -281,6 +291,19 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
       const valueUSD   = isEth ? baseFloat * ethPrice : baseFloat;
       const priceFloat = calcPrice(baseFloat, baseSymbol, tokFloat, ethPrice);
       const mcap       = priceFloat * (tokenInfo.totalSupply || 0);
+      const txHash     = event.log?.transactionHash || "unknown";
+
+      if (valueUSD < MIN_LIQ_USD) return;
+
+      if (!qualifiedTokens.has(tokenKey)) {
+        qualifiedTokens.add(tokenKey);
+        const deployer = deployerMap.get(tokenKey) || "unknown";
+        const dex      = dexMap.get(tokenKey) || dexName;
+        await alertNewToken({
+          name: tokenInfo.name, symbol: tokenInfo.symbol,
+          address: newToken, deployer, txHash, dex,
+        });
+      }
 
       await alertLiquidityAdded({
         name: tokenInfo.name, symbol: tokenInfo.symbol,
@@ -288,8 +311,7 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
         baseAmount: baseFloat.toFixed(4), baseSymbol,
         tokenAmount: tokFloat,
         totalLiqUSD: valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 }),
-        txHash: event.log?.transactionHash || "unknown",
-        dex: dexName,
+        txHash, dex: dexName,
         price: formatPrice(priceFloat),
         mcap: formatMcap(mcap),
       });
@@ -298,6 +320,7 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
 
   pool.on("Burn", async (owner, tL, tU, amount, amount0, amount1, event) => {
     try {
+      if (!qualifiedTokens.has(tokenKey)) return;
       const baseRaw   = isToken0New ? amount1 : amount0;
       const tokRaw    = isToken0New ? amount0 : amount1;
       const baseFloat = fmtUnits(baseRaw, baseDecimals);
@@ -309,6 +332,9 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
         tokenAddress: newToken, removalPct: "V3",
         provider: owner, txHash,
       });
+
+      await new Promise(r => setTimeout(r, 1000));
+
       await alertLiquidityRemoved({
         name: tokenInfo.name, symbol: tokenInfo.symbol,
         tokenAddress: newToken, provider: owner,
@@ -320,7 +346,7 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
 
   pool.on("Swap", async (sender, recipient, amount0, amount1, sqrtP, liq, tick, event) => {
     try {
-      const tokenKey   = newToken.toLowerCase();
+      if (!qualifiedTokens.has(tokenKey)) return;
       const ethPrice   = await getEthPriceUSD();
       const amt0       = BigInt(amount0.toString());
       const amt1       = BigInt(amount1.toString());
