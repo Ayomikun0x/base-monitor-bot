@@ -15,8 +15,11 @@ const TRANSFER_ABI = [
 
 async function checkLPLock(provider, pairAddress, txHash) {
   try {
-    const receipt = await provider.getTransactionReceipt(txHash);
-    if (!receipt) return "❓ Unknown";
+    const receipt = await Promise.race([
+      provider.getTransactionReceipt(txHash),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000))
+    ]);
+    if (!receipt) return "🔓 Unlocked ⚠️";
     const iface = new ethers.Interface(TRANSFER_ABI);
     for (const log of receipt.logs) {
       if (log.address.toLowerCase() !== pairAddress.toLowerCase()) continue;
@@ -30,64 +33,37 @@ async function checkLPLock(provider, pairAddress, txHash) {
         }
       } catch {}
     }
-    await new Promise(r => setTimeout(r, 15000));
-    for (let i = 1; i <= 5; i++) {
-      try {
-        const block = await provider.getBlock(receipt.blockNumber + i, true);
-        if (!block || !block.transactions) continue;
-        for (const tx of block.transactions) {
-          if (!tx.to) continue;
-          const to = tx.to.toLowerCase();
-          for (const [addr, name] of Object.entries(LP_LOCKERS)) {
-            if (to === addr.toLowerCase()) {
-              const lockReceipt = await provider.getTransactionReceipt(tx.hash);
-              if (!lockReceipt) continue;
-              for (const log of lockReceipt.logs) {
-                if (log.address.toLowerCase() === pairAddress.toLowerCase()) {
-                  return `🔒 Locked · ${name}`;
-                }
-              }
-            }
-          }
-        }
-      } catch {}
-    }
     return "🔓 Unlocked ⚠️";
   } catch {
-    return "❓ Unknown";
+    return "🔓 Unlocked ⚠️";
   }
 }
 
 async function checkHoneypot(tokenAddress) {
   try {
     const url = `https://api.gopluslabs.io/api/v1/token_security/8453?contract_addresses=${tokenAddress}`;
-    const res = await axios.get(url, { timeout: 8000 });
+    const res = await Promise.race([
+      axios.get(url, { timeout: 5000 }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 6000))
+    ]);
     const data = res.data?.result?.[tokenAddress.toLowerCase()];
     if (!data) return { status: "❓ Unknown", buyTax: "?", sellTax: "?", flags: [], safe: null };
-
-    const isHoneypot    = data.is_honeypot === "1";
-    const cannotSell    = data.cannot_sell_all === "1";
-    const buyTax        = (parseFloat(data.buy_tax || 0) * 100).toFixed(1);
-    const sellTax       = (parseFloat(data.sell_tax || 0) * 100).toFixed(1);
-    const isBlacklist   = data.is_blacklisted === "1";
-    const isMintable    = data.is_mintable === "1";
+    const isHoneypot     = data.is_honeypot === "1";
+    const cannotSell     = data.cannot_sell_all === "1";
+    const buyTax         = (parseFloat(data.buy_tax || 0) * 100).toFixed(1);
+    const sellTax        = (parseFloat(data.sell_tax || 0) * 100).toFixed(1);
+    const isBlacklist    = data.is_blacklisted === "1";
+    const isMintable     = data.is_mintable === "1";
     const ownerCanChange = data.owner_change_balance === "1";
-
     if (isHoneypot || cannotSell) {
       return { status: "🚨 HONEYPOT", buyTax, sellTax, flags: ["Cannot sell"], safe: false };
     }
-
     const flags = [];
-    if (isBlacklist)     flags.push("Blacklist");
-    if (isMintable)      flags.push("Mintable");
-    if (ownerCanChange)  flags.push("Owner can change balance");
+    if (isBlacklist)              flags.push("Blacklist");
+    if (isMintable)               flags.push("Mintable");
+    if (ownerCanChange)           flags.push("Owner can change balance");
     if (parseFloat(sellTax) > 10) flags.push("High sell tax");
-
-    return {
-      status: flags.length === 0 ? "✅ Safe" : "⚠️ Risky",
-      buyTax, sellTax, flags,
-      safe: flags.length === 0,
-    };
+    return { status: flags.length === 0 ? "✅ Safe" : "⚠️ Risky", buyTax, sellTax, flags, safe: flags.length === 0 };
   } catch {
     return { status: "❓ Unknown", buyTax: "?", sellTax: "?", flags: [], safe: null };
   }
@@ -97,11 +73,13 @@ async function checkDeployerHistory(deployerAddress) {
   try {
     const apiKey = process.env.BASESCAN_API_KEY || "";
     const url = `https://api.basescan.org/api?module=account&action=txlist&address=${deployerAddress}&sort=desc&page=1&offset=50&apikey=${apiKey}`;
-    const res = await axios.get(url, { timeout: 8000 });
+    const res = await Promise.race([
+      axios.get(url, { timeout: 5000 }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 6000))
+    ]);
     const txs = res.data?.result;
     if (!txs || !Array.isArray(txs)) return "❓ Unknown";
-    const deployments = txs.filter(tx => tx.to === "" || tx.to === null);
-    const count = deployments.length;
+    const count = txs.filter(tx => tx.to === "" || tx.to === null).length;
     if (count === 0) return "🆕 First deployment";
     if (count === 1) return "📋 1 previous contract";
     return `📋 ${count} previous contracts`;
