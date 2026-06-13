@@ -136,6 +136,7 @@ function alertStartup(watchingFactories) {
     `🍯 Honeypot detection enabled\n` +
     `🔐 LP lock detection enabled\n` +
     `⚡ Snipe detection enabled\n` +
+    `⚠️ Rug warning detection enabled\n` +
     `📈 Price milestones: 50%, 100%, 200%+\n` +
     `⏰ ${new Date().toUTCString()}`
   );
