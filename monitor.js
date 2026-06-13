@@ -197,7 +197,6 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
 
   pair.on("Burn", async (sender, amount0, amount1, to, event) => {
     try {
-      if (!qualifiedTokens.has(tokenKey)) return;
       const baseRaw   = isToken0New ? amount1 : amount0;
       const tokRaw    = isToken0New ? amount0 : amount1;
       const baseFloat = fmtUnits(baseRaw, baseDecimals);
@@ -281,9 +280,22 @@ async function watchV2Factory(provider, factoryAddress, dexName) {
         const tx = await provider.getTransaction(event.log?.transactionHash);
         deployer = tx?.from || "unknown";
       } catch {}
-      deployerMap.set(tokenKey, deployer);
-      dexMap.set(tokenKey, dexName);
-      await watchV2Pair(provider, pairAddress, token0, token1, dexName);
+deployerMap.set(tokenKey, deployer);
+dexMap.set(tokenKey, dexName);
+await watchV2Pair(provider, pairAddress, token0, token1, dexName);
+
+// Send new token alert immediately
+const tokenInfo = await getTokenInfo(provider, newToken);
+qualifiedTokens.add(tokenKey);
+liquidityAddedTime.set(tokenKey, Date.now());
+await alertNewToken({
+  name: tokenInfo.name, symbol: tokenInfo.symbol,
+  address: newToken, deployer,
+  txHash: event.log?.transactionHash || "unknown",
+  dex: dexName,
+  honeypot: { status: "⏳ Checking...", buyTax: "", sellTax: "", flags: [] },
+  deployerHistory: "⏳ Checking...",
+});
 
       // Check if liquidity was already added in same tx
       try {
@@ -374,7 +386,6 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
 
   pool.on("Burn", async (owner, tL, tU, amount, amount0, amount1, event) => {
     try {
-      if (!qualifiedTokens.has(tokenKey)) return;
       const baseRaw   = isToken0New ? amount1 : amount0;
       const tokRaw    = isToken0New ? amount0 : amount1;
       const baseFloat = fmtUnits(baseRaw, baseDecimals);
