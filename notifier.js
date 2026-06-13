@@ -68,7 +68,7 @@ function alertLiquidityAdded({ name, symbol, tokenAddress, provider, baseAmount,
     `👛 Wallet    <a href="https://basescan.org/address/${provider}">${shortAddr(provider)}</a>  ·  <a href="https://gmgn.ai/base/address/${provider}">GMGN</a>\n` +
     `📍 Contract  <code>${tokenAddress}</code>\n` +
     `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${tokenAddress}">GMGN Chart</a>`,
-    { tokenAddress }
+    { tokenAddress: tokenAddress + "_liq" }
   );
 }
 
@@ -83,7 +83,7 @@ function alertFirstBuy({ name, symbol, tokenAddress, buyer, amountIn, baseSymbol
     `👛 Wallet    <a href="https://basescan.org/address/${buyer}">${shortAddr(buyer)}</a>  ·  <a href="https://gmgn.ai/base/address/${buyer}">GMGN</a>\n` +
     `📍 Contract  <code>${tokenAddress}</code>\n` +
     `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${tokenAddress}">GMGN Chart</a>`,
-    { tokenAddress }
+    { tokenAddress: tokenAddress + "_buy" }
   );
 }
 
@@ -96,7 +96,7 @@ function alertLiquidityWarning({ name, symbol, tokenAddress, removalPct, provide
     `👛 Wallet    <a href="https://basescan.org/address/${provider}">${shortAddr(provider)}</a>  ·  <a href="https://gmgn.ai/base/address/${provider}">GMGN</a>\n` +
     `📍 Contract  <code>${tokenAddress}</code>\n` +
     `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${tokenAddress}">GMGN Chart</a>`,
-    { tokenAddress }
+    { tokenAddress: tokenAddress + "_warn" }
   );
 }
 
@@ -110,7 +110,7 @@ function alertLiquidityRemoved({ name, symbol, tokenAddress, provider, baseAmoun
     `👛 Wallet    <a href="https://basescan.org/address/${provider}">${shortAddr(provider)}</a>  ·  <a href="https://gmgn.ai/base/address/${provider}">GMGN</a>\n` +
     `📍 Contract  <code>${tokenAddress}</code>\n` +
     `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${tokenAddress}">GMGN Chart</a>`,
-    { tokenAddress }
+    { tokenAddress: tokenAddress + "_removed" }
   );
 }
 
