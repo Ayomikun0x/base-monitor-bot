@@ -4,7 +4,7 @@ const { initBot, alertStartup, sendAlert } = require("./notifier");
 const { startMonitor } = require("./monitor");
 
 function validateEnv() {
-  const required = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "BASE_RPC_HTTPS"];
+  const required = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "BASE_RPC_WSS"];
   const missing = required.filter((k) => !process.env[k]);
   if (missing.length) {
     console.error("Missing required environment variables:", missing.join(", "));
@@ -12,28 +12,41 @@ function validateEnv() {
   }
 }
 
+function createProvider() {
+  const wss = process.env.BASE_RPC_WSS;
+  const provider = new ethers.WebSocketProvider(wss);
+
+  provider.websocket.on("close", async () => {
+    console.warn("WebSocket disconnected. Reconnecting in 5s...");
+    setTimeout(() => main(), 5000);
+  });
+
+  provider.websocket.on("error", (err) => {
+    console.error("WebSocket error:", err.message);
+  });
+
+  return provider;
+}
+
 async function main() {
   validateEnv();
   initBot();
 
-  // Use HTTPS provider instead of WebSocket — works on all free tiers
-  const rpcUrl = process.env.BASE_RPC_HTTPS || process.env.BASE_RPC_WSS;
-  console.log("Connecting to Base mainnet via HTTPS...");
-
-  const provider = new ethers.JsonRpcProvider(rpcUrl);
+  console.log("Connecting to Base mainnet via WebSocket...");
+  const provider = createProvider();
 
   try {
     const blockNumber = await provider.getBlockNumber();
     console.log("Connected to Base mainnet — latest block: " + blockNumber);
   } catch (err) {
     console.error("Failed to connect to Base RPC:", err.message);
-    process.exit(1);
+    setTimeout(() => main(), 5000);
+    return;
   }
 
   const factoryCount = await startMonitor(provider);
   await alertStartup(factoryCount);
 
-  // Heartbeat every 5 minutes
   setInterval(async () => {
     try {
       const block = await provider.getBlockNumber();
