@@ -284,11 +284,42 @@ async function watchV2Factory(provider, factoryAddress, dexName) {
       deployerMap.set(tokenKey, deployer);
       dexMap.set(tokenKey, dexName);
       await watchV2Pair(provider, pairAddress, token0, token1, dexName);
+
+      // Check if liquidity was already added in same tx
+      try {
+        const tokenInfo = await getTokenInfo(provider, newToken);
+        const pair = new ethers.Contract(pairAddress, UNISWAP_V2_PAIR_ABI, provider);
+        const [reserve0, reserve1] = await pair.getReserves();
+        const isToken0New = newToken.toLowerCase() === token0.toLowerCase();
+        const baseToken   = isToken0New ? token1 : token0;
+        const baseSymbol  = getBaseSymbol(baseToken);
+        const isEth       = isEthBase(baseToken);
+        const baseDecimals = isEth ? 18 : 6;
+        const baseRaw     = isToken0New ? reserve1 : reserve0;
+        const tokRaw      = isToken0New ? reserve0 : reserve1;
+        const baseFloat   = fmtUnits(baseRaw, baseDecimals);
+        const tokFloat    = fmtUnits(tokRaw, tokenInfo.decimals);
+        const ethPrice    = await getEthPriceUSD();
+        const valueUSD    = isEth ? baseFloat * ethPrice : baseFloat;
+
+        if (valueUSD >= MIN_LIQ_USD && baseFloat > 0 && tokFloat > 0) {
+          const priceFloat = calcPrice(baseFloat, baseSymbol, tokFloat, ethPrice);
+          const mcap       = priceFloat * (tokenInfo.totalSupply || 0);
+          const txHash     = event.log?.transactionHash || "unknown";
+
+          // Save snapshot
+          try {
+            const supply = await pair.totalSupply();
+            liquiditySnapshots.set(pairAddress.toLowerCase(), supply);
+          } catch {}
+
+          await handleMint(provider, pairAddress, tokenInfo, newToken, baseFloat, tokFloat, baseSymbol, isEth, baseDecimals, valueUSD, priceFloat, mcap, txHash, dexName);
+        }
+      } catch {}
     } catch (err) { console.error("PairCreated error:", err.message); }
   });
   console.log("Watching " + dexName + " factory: " + factoryAddress);
 }
-
 async function watchV3Factory(provider, factoryAddress, dexName) {
   const factory = new ethers.Contract(factoryAddress, UNISWAP_V3_FACTORY_ABI, provider);
   factory.on("PoolCreated", async (token0, token1, fee, tickSpacing, poolAddress, event) => {
