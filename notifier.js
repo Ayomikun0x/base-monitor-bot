@@ -10,7 +10,7 @@ function initBot() {
 }
 
 const alertCooldowns = new Map();
-const COOLDOWN_MS = 3000;
+const COOLDOWN_MS = 500;
 
 async function sendAlert(message, { tokenAddress, silent = false } = {}) {
   if (!bot) return;
