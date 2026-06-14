@@ -15,6 +15,7 @@ const {
   alertNewToken,
   alertFirstBuy,
   alertLiquidityAdded,
+  alertUSDCPair,
   alertLiquidityWarning,
   alertLiquidityRemoved,
   alertPriceMilestone,
@@ -33,7 +34,7 @@ const dexMap             = new Map();
 const liquidityAddedTime = new Map();
 
 const MILESTONES      = [50, 100, 150, 200, 300, 500, 1000];
-const MIN_LIQ_USD     = Number(process.env.MIN_LIQUIDITY_USD || 500);
+const MIN_LIQ_USD     = Number(process.env.MIN_LIQUIDITY_USD || 2000);
 const SNIPE_WINDOW_MS = 60000;
 
 function getNewToken(token0, token1) {
@@ -103,6 +104,95 @@ async function checkPriceMilestone(tokenAddress, name, symbol, currentPrice) {
   }
 }
 
+async function sendLiquidityAlert({ tokenInfo, newToken, baseFloat, tokFloat, baseSymbol, isEth, valueUSD, priceFloat, mcap, txHash, dexName, deployer, honeypot, deployerHistory, lpStatus }) {
+  // Skip high tax tokens
+  if (honeypot && parseFloat(honeypot.sellTax) > 5) {
+    console.log("Skipping high tax token: " + tokenInfo.symbol + " sell tax: " + honeypot.sellTax + "%");
+    return;
+  }
+  if (honeypot && honeypot.safe === false && honeypot.status === "🚨 HONEYPOT") {
+    console.log("Skipping honeypot: " + tokenInfo.symbol);
+    return;
+  }
+
+  // Send special USDC alert or regular alert
+  if (baseSymbol === "USDC") {
+    await alertUSDCPair({
+      name: tokenInfo.name, symbol: tokenInfo.symbol,
+      tokenAddress: newToken, provider: deployer,
+      baseAmount: baseFloat.toFixed(4),
+      tokenAmount: tokFloat,
+      totalLiqUSD: valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 }),
+      txHash, dex: dexName,
+      price: formatPrice(priceFloat),
+      mcap: formatMcap(mcap),
+      lpStatus, honeypot, deployerHistory,
+    });
+  } else {
+    await alertLiquidityAdded({
+      name: tokenInfo.name, symbol: tokenInfo.symbol,
+      tokenAddress: newToken, provider: deployer,
+      baseAmount: baseFloat.toFixed(4), baseSymbol,
+      tokenAmount: tokFloat,
+      totalLiqUSD: valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 }),
+      txHash, dex: dexName,
+      price: formatPrice(priceFloat),
+      mcap: formatMcap(mcap),
+      lpStatus, honeypot, deployerHistory,
+    });
+  }
+}
+
+async function handleMint(provider, pairAddress, tokenInfo, newToken, baseFloat, tokFloat, baseSymbol, isEth, baseDecimals, valueUSD, priceFloat, mcap, txHash, dexName) {
+  const tokenKey = newToken.toLowerCase();
+
+  if (!liquidityAddedTime.has(tokenKey)) {
+    liquidityAddedTime.set(tokenKey, Date.now());
+  }
+
+  const deployer = deployerMap.get(tokenKey) || "unknown";
+
+  if (!qualifiedTokens.has(tokenKey)) {
+    qualifiedTokens.add(tokenKey);
+
+    // Fire new token alert instantly
+    await alertNewToken({
+      name: tokenInfo.name, symbol: tokenInfo.symbol,
+      address: newToken, deployer, txHash,
+      dex: dexMap.get(tokenKey) || dexName,
+      honeypot: { status: "⏳ Checking...", buyTax: "", sellTax: "", flags: [] },
+      deployerHistory: "⏳ Checking...",
+    });
+
+    // Run safety checks in background
+    Promise.all([
+      checkHoneypot(newToken),
+      checkDeployerHistory(deployer),
+      checkLPLock(provider, pairAddress, txHash),
+    ]).then(async ([honeypot, deployerHistory, lpStatus]) => {
+      await sendLiquidityAlert({
+        tokenInfo, newToken, baseFloat, tokFloat,
+        baseSymbol, isEth, valueUSD, priceFloat, mcap,
+        txHash, dexName, deployer, honeypot, deployerHistory, lpStatus,
+      });
+    }).catch(err => console.error("Safety check error:", err.message));
+
+  } else {
+    // Subsequent liquidity adds
+    Promise.all([
+      checkHoneypot(newToken),
+      checkDeployerHistory(deployer),
+      checkLPLock(provider, pairAddress, txHash),
+    ]).then(async ([honeypot, deployerHistory, lpStatus]) => {
+      await sendLiquidityAlert({
+        tokenInfo, newToken, baseFloat, tokFloat,
+        baseSymbol, isEth, valueUSD, priceFloat, mcap,
+        txHash, dexName, deployer, honeypot, deployerHistory, lpStatus,
+      });
+    }).catch(() => {});
+  }
+}
+
 async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
   const result = getNewToken(token0, token1);
   if (!result) return;
@@ -134,31 +224,7 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
 
       if (valueUSD < MIN_LIQ_USD) return;
 
-      if (!liquidityAddedTime.has(tokenKey)) {
-        liquidityAddedTime.set(tokenKey, Date.now());
-      }
-
-      const deployer = deployerMap.get(tokenKey) || "unknown";
-
-      // Run safety checks
-      const [honeypot, deployerHistory, lpStatus] = await Promise.all([
-        checkHoneypot(newToken),
-        checkDeployerHistory(deployer),
-        checkLPLock(provider, pairAddress, txHash),
-      ]);
-
-      // Send liquidity added with full data — use different cooldown key
-      await alertLiquidityAdded({
-        name: tokenInfo.name, symbol: tokenInfo.symbol,
-        tokenAddress: newToken, provider: sender,
-        baseAmount: baseFloat.toFixed(4), baseSymbol,
-        tokenAmount: tokFloat,
-        totalLiqUSD: valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 }),
-        txHash, dex: dexName,
-        price: formatPrice(priceFloat),
-        mcap: formatMcap(mcap),
-        lpStatus, honeypot, deployerHistory,
-      });
+      await handleMint(provider, pairAddress, tokenInfo, newToken, baseFloat, tokFloat, baseSymbol, isEth, baseDecimals, valueUSD, priceFloat, mcap, txHash, dexName);
     } catch (err) { console.error("Mint error:", err.message); }
   });
 
@@ -291,39 +357,16 @@ async function watchV2Factory(provider, factoryAddress, dexName) {
             liquiditySnapshots.set(pairAddress.toLowerCase(), supply);
           } catch {}
 
-          // Run safety checks
-    const [honeypot, deployerHistory, lpStatus] = await Promise.all([
-      checkHoneypot(newToken),
-      checkDeployerHistory(deployer),
-      checkLPLock(provider, pairAddress, txHash),
-    ]);
+          const [honeypot, deployerHistory, lpStatus] = await Promise.all([
+            checkHoneypot(newToken),
+            checkDeployerHistory(deployer),
+            checkLPLock(provider, pairAddress, txHash),
+          ]);
 
-    // Skip high tax tokens
-    if (honeypot && honeypot.safe === false) {
-      console.log("Skipping honeypot token: " + tokenInfo.symbol);
-      return;
-    }
-    if (honeypot && parseFloat(honeypot.sellTax) > 5) {
-      console.log("Skipping high tax token: " + tokenInfo.symbol + " sell tax: " + honeypot.sellTax + "%");
-      return;
-    }
-
-    // Add big warning if LP unlocked
-    const lpWarning = lpStatus && lpStatus.includes("Unlocked")
-      ? "\n🚨 <b>WARNING — LP UNLOCKED! Dev can rug anytime!</b>"
-      : "";
-
-    // Send liquidity added with full data
-    await alertLiquidityAdded({
-            name: tokenInfo.name, symbol: tokenInfo.symbol,
-            tokenAddress: newToken, provider: deployer,
-            baseAmount: baseFloat.toFixed(4), baseSymbol,
-            tokenAmount: tokFloat,
-            totalLiqUSD: valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 }),
-            txHash, dex: dexName,
-            price: formatPrice(priceFloat),
-            mcap: formatMcap(mcap),
-            lpStatus, honeypot, deployerHistory,
+          await sendLiquidityAlert({
+            tokenInfo, newToken, baseFloat, tokFloat,
+            baseSymbol, isEth, valueUSD, priceFloat, mcap,
+            txHash, dexName, deployer, honeypot, deployerHistory, lpStatus,
           });
         }
       } catch {}
@@ -392,27 +435,18 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
 
       if (valueUSD < MIN_LIQ_USD) return;
 
-      if (!liquidityAddedTime.has(tokenKey)) {
-        liquidityAddedTime.set(tokenKey, Date.now());
-      }
-
       const deployer = deployerMap.get(tokenKey) || "unknown";
+
       const [honeypot, deployerHistory, lpStatus] = await Promise.all([
         checkHoneypot(newToken),
         checkDeployerHistory(deployer),
         checkLPLock(provider, poolAddress, txHash),
       ]);
 
-      await alertLiquidityAdded({
-        name: tokenInfo.name, symbol: tokenInfo.symbol,
-        tokenAddress: newToken, provider: sender,
-        baseAmount: baseFloat.toFixed(4), baseSymbol,
-        tokenAmount: tokFloat,
-        totalLiqUSD: valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 }),
-        txHash, dex: dexName,
-        price: formatPrice(priceFloat),
-        mcap: formatMcap(mcap),
-        lpStatus, honeypot, deployerHistory,
+      await sendLiquidityAlert({
+        tokenInfo, newToken, baseFloat, tokFloat,
+        baseSymbol, isEth, valueUSD, priceFloat, mcap,
+        txHash, dexName, deployer, honeypot, deployerHistory, lpStatus,
       });
     } catch (err) { console.error("V3 Mint error:", err.message); }
   });
