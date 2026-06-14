@@ -73,7 +73,32 @@ function alertLiquidityAdded({ name, symbol, tokenAddress, provider, baseAmount,
     { tokenAddress: tokenAddress + "_liq" }
   );
 }
+function alertUSDCPair({ name, symbol, tokenAddress, provider, baseAmount, tokenAmount, totalLiqUSD, txHash, dex, price, mcap, lpStatus, honeypot, deployerHistory }) {
+  const hp = honeypot || {};
+  const hpText = hp.status ? `${hp.status}  Buy ${hp.buyTax || "?"}%  Sell ${hp.sellTax || "?"}%` : "";
+  const safetyLine = hpText ? `🍯 Safety    ${hpText}\n` : "";
+  const historyLine = deployerHistory ? `📋 History   ${deployerHistory}\n` : "";
+  const isUnlocked = lpStatus && lpStatus.includes("Unlocked");
+  const lpWarning = isUnlocked ? `\n🚨 <b>WARNING — LP UNLOCKED!</b>` : "";
 
+  return sendAlert(
+    `💎🔥 <b>USDC PAIR ALERT</b> 🔥💎\n\n` +
+    `<b>${name}</b>  <code>$${symbol}</code>  ·  ${dex}\n\n` +
+    `⚡ <b>HISTORICALLY STRONGER MOVES!</b>\n\n` +
+    `💵 Added     <b>${baseAmount} USDC</b>\n` +
+    `🪙 Tokens    ${formatNumber(tokenAmount)} ${symbol}\n` +
+    `🏊 Pool      ~$${totalLiqUSD}\n` +
+    `💲 Price     <b>$${price}</b>\n` +
+    `📊 MCap      <b>$${mcap}</b>\n` +
+    `🔐 LP        ${lpStatus || "❓ Unknown"}${lpWarning}\n` +
+    `${safetyLine}` +
+    `${historyLine}\n` +
+    `👛 Wallet    <a href="https://basescan.org/address/${provider}">${shortAddr(provider)}</a>  ·  <a href="https://gmgn.ai/base/address/${provider}">GMGN</a>\n` +
+    `📍 Contract  <code>${tokenAddress}</code>\n` +
+    `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${tokenAddress}">GMGN Chart</a>`,
+    { tokenAddress: tokenAddress + "_usdc" }
+  );
+}
 function alertFirstBuy({ name, symbol, tokenAddress, buyer, amountIn, baseSymbol, amountOut, valueUSD, txHash, isSnipe }) {
   const snipeTag = isSnipe ? `\n⚡ <b>SNIPE DETECTED</b> — bought within 60s of liquidity!` : "";
   return sendAlert(
@@ -160,7 +185,7 @@ function formatNumber(n) {
 
 module.exports = {
   initBot, sendAlert, alertNewToken, alertFirstBuy,
-  alertLiquidityAdded, alertLiquidityWarning,
+  alertLiquidityAdded, alertUSDCPair, alertLiquidityWarning,
   alertLiquidityRemoved, alertPriceMilestone,
   alertStartup, shortAddr, formatNumber,
 };
