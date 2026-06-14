@@ -32,8 +32,8 @@ async function sendAlert(message, { tokenAddress, silent = false } = {}) {
 
 function alertNewToken({ name, symbol, address, deployer, txHash, dex, deployerHistory, honeypot }) {
   const hp = honeypot || {};
-  const hpText = hp.status || "❓ Unknown";
-  const taxText = (hp.buyTax && hp.buyTax !== "?") ? `  Buy ${hp.buyTax}%  Sell ${hp.sellTax}%` : "";
+  const hpText = hp.status || "⏳ Checking...";
+  const taxText = (hp.buyTax && hp.buyTax !== "") ? `  Buy ${hp.buyTax}%  Sell ${hp.sellTax}%` : "";
   const flagText = (hp.flags && hp.flags.length) ? `\n⚑  ${hp.flags.join(" · ")}` : "";
 
   return sendAlert(
@@ -41,7 +41,7 @@ function alertNewToken({ name, symbol, address, deployer, txHash, dex, deployerH
     `<b>${name}</b>  <code>$${symbol}</code>  ·  ${dex}\n\n` +
     `🍯 Safety    ${hpText}${taxText}${flagText}\n` +
     `👤 Deployer  <a href="https://basescan.org/address/${deployer}">${shortAddr(deployer)}</a>\n` +
-    `📋 History   ${deployerHistory || "❓ Unknown"}\n` +
+    `📋 History   ${deployerHistory || "⏳ Checking..."}\n` +
     `📍 Contract  <code>${address}</code>\n\n` +
     `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${address}">GMGN</a>  ·  <a href="https://basescan.org/token/${address}">Basescan</a>`,
     { tokenAddress: address }
@@ -65,23 +65,6 @@ function alertLiquidityAdded({ name, symbol, tokenAddress, provider, baseAmount,
     `💲 Price     <b>$${price}</b>\n` +
     `📊 MCap      <b>$${mcap}</b>\n` +
     `🔐 LP        ${lpStatus || "❓ Unknown"}${lpWarning}\n` +
-    `${safetyLine}` +
-    `${historyLine}\n` +
-    `👛 Wallet    <a href="https://basescan.org/address/${provider}">${shortAddr(provider)}</a>  ·  <a href="https://gmgn.ai/base/address/${provider}">GMGN</a>\n` +
-    `📍 Contract  <code>${tokenAddress}</code>\n` +
-    `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${tokenAddress}">GMGN Chart</a>`,
-    { tokenAddress: tokenAddress + "_liq" }
-  );
-}
-  return sendAlert(
-    `💧 <b>LIQUIDITY ADDED</b>\n\n` +
-    `<b>${name}</b>  <code>$${symbol}</code>  ·  ${dex}\n\n` +
-    `💵 Added     <b>${baseAmount} ${baseSymbol}</b>\n` +
-    `🪙 Tokens    ${formatNumber(tokenAmount)} ${symbol}\n` +
-    `🏊 Pool      ~$${totalLiqUSD}\n` +
-    `💲 Price     <b>$${price}</b>\n` +
-    `📊 MCap      <b>$${mcap}</b>\n` +
-    `🔐 LP        ${lpStatus || "❓ Unknown"}\n` +
     `${safetyLine}` +
     `${historyLine}\n` +
     `👛 Wallet    <a href="https://basescan.org/address/${provider}">${shortAddr(provider)}</a>  ·  <a href="https://gmgn.ai/base/address/${provider}">GMGN</a>\n` +
@@ -143,7 +126,7 @@ function alertPriceMilestone({ name, symbol, tokenAddress, gainPct, currentPrice
     `🏁 Started   $${fromPrice}\n\n` +
     `📍 Contract  <code>${tokenAddress}</code>\n` +
     `🔗 <a href="https://gmgn.ai/base/token/${tokenAddress}">GMGN Chart</a>`,
-    { tokenAddress }
+    { tokenAddress: tokenAddress + "_milestone" }
   );
 }
 
@@ -156,6 +139,7 @@ function alertStartup(watchingFactories) {
     `🔐 LP lock detection enabled\n` +
     `⚡ Snipe detection enabled\n` +
     `⚠️ Rug warning detection enabled\n` +
+    `🚫 High tax tokens filtered out\n` +
     `📈 Price milestones: 50%, 100%, 200%+\n` +
     `⏰ ${new Date().toUTCString()}`
   );
