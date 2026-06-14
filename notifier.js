@@ -53,7 +53,26 @@ function alertLiquidityAdded({ name, symbol, tokenAddress, provider, baseAmount,
   const hpText = hp.status ? `${hp.status}  Buy ${hp.buyTax || "?"}%  Sell ${hp.sellTax || "?"}%` : "";
   const safetyLine = hpText ? `🍯 Safety    ${hpText}\n` : "";
   const historyLine = deployerHistory ? `📋 History   ${deployerHistory}\n` : "";
+  const isUnlocked = lpStatus && lpStatus.includes("Unlocked");
+  const lpWarning = isUnlocked ? `\n🚨 <b>WARNING — LP UNLOCKED! Dev can rug anytime!</b>` : "";
 
+  return sendAlert(
+    `💧 <b>LIQUIDITY ADDED${isUnlocked ? " ⚠️" : ""}</b>\n\n` +
+    `<b>${name}</b>  <code>$${symbol}</code>  ·  ${dex}\n\n` +
+    `💵 Added     <b>${baseAmount} ${baseSymbol}</b>\n` +
+    `🪙 Tokens    ${formatNumber(tokenAmount)} ${symbol}\n` +
+    `🏊 Pool      ~$${totalLiqUSD}\n` +
+    `💲 Price     <b>$${price}</b>\n` +
+    `📊 MCap      <b>$${mcap}</b>\n` +
+    `🔐 LP        ${lpStatus || "❓ Unknown"}${lpWarning}\n` +
+    `${safetyLine}` +
+    `${historyLine}\n` +
+    `👛 Wallet    <a href="https://basescan.org/address/${provider}">${shortAddr(provider)}</a>  ·  <a href="https://gmgn.ai/base/address/${provider}">GMGN</a>\n` +
+    `📍 Contract  <code>${tokenAddress}</code>\n` +
+    `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${tokenAddress}">GMGN Chart</a>`,
+    { tokenAddress: tokenAddress + "_liq" }
+  );
+}
   return sendAlert(
     `💧 <b>LIQUIDITY ADDED</b>\n\n` +
     `<b>${name}</b>  <code>$${symbol}</code>  ·  ${dex}\n\n` +
