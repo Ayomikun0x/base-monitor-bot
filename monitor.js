@@ -291,13 +291,30 @@ async function watchV2Factory(provider, factoryAddress, dexName) {
             liquiditySnapshots.set(pairAddress.toLowerCase(), supply);
           } catch {}
 
-          const [honeypot, deployerHistory, lpStatus] = await Promise.all([
-            checkHoneypot(newToken),
-            checkDeployerHistory(deployer),
-            checkLPLock(provider, pairAddress, txHash),
-          ]);
+          // Run safety checks
+    const [honeypot, deployerHistory, lpStatus] = await Promise.all([
+      checkHoneypot(newToken),
+      checkDeployerHistory(deployer),
+      checkLPLock(provider, pairAddress, txHash),
+    ]);
 
-          await alertLiquidityAdded({
+    // Skip high tax tokens
+    if (honeypot && honeypot.safe === false) {
+      console.log("Skipping honeypot token: " + tokenInfo.symbol);
+      return;
+    }
+    if (honeypot && parseFloat(honeypot.sellTax) > 5) {
+      console.log("Skipping high tax token: " + tokenInfo.symbol + " sell tax: " + honeypot.sellTax + "%");
+      return;
+    }
+
+    // Add big warning if LP unlocked
+    const lpWarning = lpStatus && lpStatus.includes("Unlocked")
+      ? "\n🚨 <b>WARNING — LP UNLOCKED! Dev can rug anytime!</b>"
+      : "";
+
+    // Send liquidity added with full data
+    await alertLiquidityAdded({
             name: tokenInfo.name, symbol: tokenInfo.symbol,
             tokenAddress: newToken, provider: deployer,
             baseAmount: baseFloat.toFixed(4), baseSymbol,
