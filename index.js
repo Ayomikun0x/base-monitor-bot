@@ -2,6 +2,7 @@ require("dotenv").config();
 const { ethers } = require("ethers");
 const { initBot, alertStartup, sendAlert } = require("./notifier");
 const { startMonitor } = require("./monitor");
+const { getBlacklistStats } = require("./blacklist");
 
 function validateEnv() {
   const required = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "BASE_RPC_WSS"];
@@ -44,8 +45,8 @@ async function main() {
     return;
   }
 
- const { getBlacklistStats } = require("./blacklist");
-await alertStartup(factoryCount, getBlacklistStats());
+  const factoryCount = await startMonitor(provider);
+  await alertStartup(factoryCount, getBlacklistStats());
 
   setInterval(async () => {
     try {
