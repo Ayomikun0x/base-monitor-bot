@@ -155,7 +155,7 @@ function alertPriceMilestone({ name, symbol, tokenAddress, gainPct, currentPrice
   );
 }
 
-function alertStartup(watchingFactories) {
+function alertStartup(watchingFactories, blacklistStats) {
   return sendAlert(
     `🤖 <b>Base Token Monitor — ONLINE</b>\n\n` +
     `📡 Watching ${watchingFactories} DEX factories\n` +
@@ -165,6 +165,8 @@ function alertStartup(watchingFactories) {
     `⚡ Snipe detection enabled\n` +
     `⚠️ Rug warning detection enabled\n` +
     `🚫 High tax tokens filtered out\n` +
+    `🛡️ Blacklisted symbols: ${blacklistStats?.symbols || 0}\n` +
+    `🛡️ Blacklisted deployers: ${blacklistStats?.deployers || 0}\n` +
     `📈 Price milestones: 50%, 100%, 200%+\n` +
     `⏰ ${new Date().toUTCString()}`
   );
