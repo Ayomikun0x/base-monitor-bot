@@ -1,8 +1,15 @@
 // Auto-growing blacklist of known rug deployers and symbols
 const rugDeployers  = new Set();
-const rugSymbols    = new Set([
+const rugSymbols = new Set([
   "XCHAT",
   "ANTHROPIC",
+  "1KTO100M",
+  "OPENHUMAN",
+  "VRT",
+  "HODL",
+  "SPACEX",
+  "SPCX",
+  "LIQUIDBGT",
   // Add more symbols here anytime
 ]);
 
