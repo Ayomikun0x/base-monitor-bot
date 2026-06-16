@@ -44,8 +44,8 @@ async function main() {
     return;
   }
 
-  const factoryCount = await startMonitor(provider);
-  await alertStartup(factoryCount);
+ const { getBlacklistStats } = require("./blacklist");
+await alertStartup(factoryCount, getBlacklistStats());
 
   setInterval(async () => {
     try {
