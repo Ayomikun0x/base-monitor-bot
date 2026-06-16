@@ -21,9 +21,16 @@ const {
   alertPriceMilestone,
 } = require("./notifier");
 
-const { getTokenInfo } = require("./tokenInfo");
-const { getEthPriceUSD } = require("./price");
+const { getTokenInfo }                                    = require("./tokenInfo");
+const { getEthPriceUSD }                                  = require("./price");
 const { checkLPLock, checkHoneypot, checkDeployerHistory } = require("./safety");
+const {
+  isBlacklistedDeployer,
+  isBlacklistedSymbol,
+  trackLiquidity,
+  checkAndBlacklist,
+  getBlacklistStats,
+} = require("./blacklist");
 
 const firstBuyDone       = new Set();
 const liquiditySnapshots = new Map();
@@ -105,15 +112,20 @@ async function checkPriceMilestone(tokenAddress, name, symbol, currentPrice) {
 }
 
 async function sendLiquidityAlert({ tokenInfo, newToken, baseFloat, tokFloat, baseSymbol, isEth, valueUSD, priceFloat, mcap, txHash, dexName, deployer, honeypot, deployerHistory, lpStatus }) {
-  // Skip high tax tokens
-  if (honeypot && parseFloat(honeypot.sellTax) > 5) {
-    console.log("Skipping high tax token: " + tokenInfo.symbol + " sell tax: " + honeypot.sellTax + "%");
-    return;
-  }
+  // Skip honeypots
   if (honeypot && honeypot.safe === false && honeypot.status === "🚨 HONEYPOT") {
     console.log("Skipping honeypot: " + tokenInfo.symbol);
     return;
   }
+
+  // Skip high tax tokens
+  if (honeypot && parseFloat(honeypot.sellTax) > 5) {
+    console.log("Skipping high tax: " + tokenInfo.symbol + " sell tax: " + honeypot.sellTax + "%");
+    return;
+  }
+
+  // Track liquidity time for rug detection
+  trackLiquidity(deployer, newToken, tokenInfo.symbol);
 
   // Send special USDC alert or regular alert
   if (baseSymbol === "USDC") {
@@ -145,12 +157,11 @@ async function sendLiquidityAlert({ tokenInfo, newToken, baseFloat, tokFloat, ba
 
 async function handleMint(provider, pairAddress, tokenInfo, newToken, baseFloat, tokFloat, baseSymbol, isEth, baseDecimals, valueUSD, priceFloat, mcap, txHash, dexName) {
   const tokenKey = newToken.toLowerCase();
+  const deployer = deployerMap.get(tokenKey) || "unknown";
 
   if (!liquidityAddedTime.has(tokenKey)) {
     liquidityAddedTime.set(tokenKey, Date.now());
   }
-
-  const deployer = deployerMap.get(tokenKey) || "unknown";
 
   if (!qualifiedTokens.has(tokenKey)) {
     qualifiedTokens.add(tokenKey);
@@ -178,7 +189,6 @@ async function handleMint(provider, pairAddress, tokenInfo, newToken, baseFloat,
     }).catch(err => console.error("Safety check error:", err.message));
 
   } else {
-    // Subsequent liquidity adds
     Promise.all([
       checkHoneypot(newToken),
       checkDeployerHistory(deployer),
@@ -235,6 +245,7 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
       const baseFloat = fmtUnits(baseRaw, baseDecimals);
       const tokFloat  = fmtUnits(tokRaw, tokenInfo.decimals);
       const txHash    = event.log?.transactionHash || "unknown";
+      const deployer  = deployerMap.get(tokenKey) || "unknown";
 
       let removedPct = "?";
       try {
@@ -246,6 +257,13 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
         }
         liquiditySnapshots.set(pairAddress.toLowerCase(), currentSupply);
       } catch {}
+
+      // Check if this is a rug and blacklist deployer
+      const isRug = checkAndBlacklist(deployer, newToken);
+      if (isRug) {
+        const stats = getBlacklistStats();
+        console.log("🚨 Rug confirmed! Deployer blacklisted. Total blacklisted: " + stats.deployers);
+      }
 
       await alertLiquidityWarning({
         name: tokenInfo.name, symbol: tokenInfo.symbol,
@@ -313,12 +331,24 @@ async function watchV2Factory(provider, factoryAddress, dexName) {
         const tx = await provider.getTransaction(event.log?.transactionHash);
         deployer = tx?.from || "unknown";
       } catch {}
+
+      // Check blacklists before doing anything
+      const tokenInfo = await getTokenInfo(provider, newToken);
+
+      if (isBlacklistedDeployer(deployer)) {
+        console.log("🚫 Skipping blacklisted deployer: " + deployer + " (" + tokenInfo.symbol + ")");
+        return;
+      }
+
+      if (isBlacklistedSymbol(tokenInfo.symbol)) {
+        console.log("🚫 Skipping blacklisted symbol: " + tokenInfo.symbol);
+        return;
+      }
+
       deployerMap.set(tokenKey, deployer);
       dexMap.set(tokenKey, dexName);
       await watchV2Pair(provider, pairAddress, token0, token1, dexName);
 
-      // Send new token alert immediately and qualify token
-      const tokenInfo = await getTokenInfo(provider, newToken);
       qualifiedTokens.add(tokenKey);
       liquidityAddedTime.set(tokenKey, Date.now());
 
@@ -389,9 +419,21 @@ async function watchV3Factory(provider, factoryAddress, dexName) {
         const tx = await provider.getTransaction(event.log?.transactionHash);
         deployer = tx?.from || "unknown";
       } catch {}
+
+      const tokenInfo = await getTokenInfo(provider, newToken);
+
+      if (isBlacklistedDeployer(deployer)) {
+        console.log("🚫 Skipping blacklisted deployer: " + deployer + " (" + tokenInfo.symbol + ")");
+        return;
+      }
+
+      if (isBlacklistedSymbol(tokenInfo.symbol)) {
+        console.log("🚫 Skipping blacklisted symbol: " + tokenInfo.symbol);
+        return;
+      }
+
       deployerMap.set(tokenKey, deployer);
       dexMap.set(tokenKey, fullDex);
-      const tokenInfo = await getTokenInfo(provider, newToken);
       qualifiedTokens.add(tokenKey);
       liquidityAddedTime.set(tokenKey, Date.now());
 
@@ -432,10 +474,9 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
       const priceFloat = calcPrice(baseFloat, baseSymbol, tokFloat, ethPrice);
       const mcap       = priceFloat * (tokenInfo.totalSupply || 0);
       const txHash     = event.log?.transactionHash || "unknown";
+      const deployer   = deployerMap.get(tokenKey) || "unknown";
 
       if (valueUSD < MIN_LIQ_USD) return;
-
-      const deployer = deployerMap.get(tokenKey) || "unknown";
 
       const [honeypot, deployerHistory, lpStatus] = await Promise.all([
         checkHoneypot(newToken),
@@ -458,6 +499,13 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
       const baseFloat = fmtUnits(baseRaw, baseDecimals);
       const tokFloat  = fmtUnits(tokRaw, tokenInfo.decimals);
       const txHash    = event.log?.transactionHash || "unknown";
+      const deployer  = deployerMap.get(tokenKey) || "unknown";
+
+      const isRug = checkAndBlacklist(deployer, newToken);
+      if (isRug) {
+        const stats = getBlacklistStats();
+        console.log("🚨 V3 Rug confirmed! Deployer blacklisted. Total: " + stats.deployers);
+      }
 
       await alertLiquidityWarning({
         name: tokenInfo.name, symbol: tokenInfo.symbol,
@@ -514,6 +562,8 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
 
 async function startMonitor(provider) {
   console.log("Starting Base chain monitor...");
+  const stats = getBlacklistStats();
+  console.log("Blacklist loaded — Deployers: " + stats.deployers + " Symbols: " + stats.symbols);
   for (const { address, name } of V2_FACTORIES) await watchV2Factory(provider, address, name);
   for (const { address, name } of V3_FACTORIES) await watchV3Factory(provider, address, name);
   const total = V2_FACTORIES.length + V3_FACTORIES.length;
