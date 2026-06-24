@@ -4,14 +4,16 @@
   "description": "Telegram bot for monitoring Base chain token events",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
     "node-telegram-bot-api": "^0.64.0",
     "ethers": "^6.13.0",
     "dotenv": "^16.4.5",
-    "axios": "^1.7.2"
+    "axios": "^1.7.2",
+    "googleapis": "^144.0.0",
+    "google-auth-library": "^9.14.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.4"
