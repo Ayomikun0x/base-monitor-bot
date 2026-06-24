@@ -21,9 +21,10 @@ const {
   alertPriceMilestone,
 } = require("./notifier");
 
-const { getTokenInfo }                                    = require("./tokenInfo");
-const { getEthPriceUSD }                                  = require("./price");
-const { checkLPLock, checkHoneypot, checkDeployerHistory } = require("./safety");
+const { getTokenInfo }                                     = require("./tokenInfo");
+const { getEthPriceUSD }                                   = require("./price");
+const { checkLPLock, checkHoneypot, checkDeployerHistory }  = require("./safety");
+const { logQualifyingToken }                                = require("./sheetLogger");
 const {
   isBlacklistedDeployer,
   isBlacklistedSymbol,
@@ -91,6 +92,20 @@ function calcPrice(baseFloat, baseSymbol, tokFloat, ethPrice) {
   return baseUSD / tokFloat;
 }
 
+function makeTrackerMeta(tokenKey, dexName, priceFloat, tokenInfo) {
+  return {
+    deployer: deployerMap.get(tokenKey) || "",
+    dex: dexMap.get(tokenKey) || dexName || "",
+    mcap: formatMcap(priceFloat * (tokenInfo.totalSupply || 0)),
+    liquidityUSD: "",
+    lpStatus: "",
+    safetyStatus: "",
+    buyTax: "",
+    sellTax: "",
+    deployerHistory: "",
+  };
+}
+
 async function checkPriceMilestone(tokenAddress, name, symbol, currentPrice) {
   const tracker = priceTrackers.get(tokenAddress.toLowerCase());
   if (!tracker || !tracker.firstBuyPrice) return;
@@ -103,6 +118,25 @@ async function checkPriceMilestone(tokenAddress, name, symbol, currentPrice) {
         currentPrice: formatPrice(currentPrice),
         fromPrice: formatPrice(tracker.firstBuyPrice),
       });
+
+      if (milestone >= 200 && !tracker.loggedToSheet) {
+        tracker.loggedToSheet = true;
+        const meta = tracker.meta || {};
+        logQualifyingToken({
+          name, symbol, address: tokenAddress,
+          deployer: meta.deployer || "",
+          dex: meta.dex || "",
+          mcap: meta.mcap || "",
+          gainPct: milestone,
+          liquidityUSD: meta.liquidityUSD || "",
+          lpStatus: meta.lpStatus || "",
+          safetyStatus: meta.safetyStatus || "",
+          buyTax: meta.buyTax || "",
+          sellTax: meta.sellTax || "",
+          deployerHistory: meta.deployerHistory || "",
+        }).catch(() => {});
+      }
+
       const nextIdx = MILESTONES.indexOf(milestone) + 1;
       tracker.nextMilestone = nextIdx < MILESTONES.length ? MILESTONES[nextIdx] : 999999;
       priceTrackers.set(tokenAddress.toLowerCase(), tracker);
@@ -112,22 +146,31 @@ async function checkPriceMilestone(tokenAddress, name, symbol, currentPrice) {
 }
 
 async function sendLiquidityAlert({ tokenInfo, newToken, baseFloat, tokFloat, baseSymbol, isEth, valueUSD, priceFloat, mcap, txHash, dexName, deployer, honeypot, deployerHistory, lpStatus }) {
-  // Skip honeypots
   if (honeypot && honeypot.safe === false && honeypot.status === "🚨 HONEYPOT") {
     console.log("Skipping honeypot: " + tokenInfo.symbol);
     return;
   }
-
-  // Skip high tax tokens
   if (honeypot && parseFloat(honeypot.sellTax) > 5) {
     console.log("Skipping high tax: " + tokenInfo.symbol + " sell tax: " + honeypot.sellTax + "%");
     return;
   }
 
-  // Track liquidity time for rug detection
   trackLiquidity(deployer, newToken, tokenInfo.symbol);
 
-  // Send special USDC alert or regular alert
+  // Attach safety/liquidity data to tracker meta if it already exists
+  const tokenKey = newToken.toLowerCase();
+  const existingTracker = priceTrackers.get(tokenKey);
+  if (existingTracker) {
+    existingTracker.meta = existingTracker.meta || {};
+    existingTracker.meta.liquidityUSD = valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 });
+    existingTracker.meta.lpStatus = lpStatus || "";
+    existingTracker.meta.safetyStatus = honeypot?.status || "";
+    existingTracker.meta.buyTax = honeypot?.buyTax || "";
+    existingTracker.meta.sellTax = honeypot?.sellTax || "";
+    existingTracker.meta.deployerHistory = deployerHistory || "";
+    priceTrackers.set(tokenKey, existingTracker);
+  }
+
   if (baseSymbol === "USDC") {
     await alertUSDCPair({
       name: tokenInfo.name, symbol: tokenInfo.symbol,
@@ -166,7 +209,6 @@ async function handleMint(provider, pairAddress, tokenInfo, newToken, baseFloat,
   if (!qualifiedTokens.has(tokenKey)) {
     qualifiedTokens.add(tokenKey);
 
-    // Fire new token alert instantly
     await alertNewToken({
       name: tokenInfo.name, symbol: tokenInfo.symbol,
       address: newToken, deployer, txHash,
@@ -175,7 +217,6 @@ async function handleMint(provider, pairAddress, tokenInfo, newToken, baseFloat,
       deployerHistory: "⏳ Checking...",
     });
 
-    // Run safety checks in background
     Promise.all([
       checkHoneypot(newToken),
       checkDeployerHistory(deployer),
@@ -258,7 +299,6 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
         liquiditySnapshots.set(pairAddress.toLowerCase(), currentSupply);
       } catch {}
 
-      // Check if this is a rug and blacklist deployer
       const isRug = checkAndBlacklist(deployer, newToken);
       if (isRug) {
         const stats = getBlacklistStats();
@@ -297,7 +337,11 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
 
       if (!firstBuyDone.has(tokenKey)) {
         firstBuyDone.add(tokenKey);
-        priceTrackers.set(tokenKey, { firstBuyPrice: priceFloat, nextMilestone: MILESTONES[0] });
+        priceTrackers.set(tokenKey, {
+          firstBuyPrice: priceFloat,
+          nextMilestone: MILESTONES[0],
+          meta: makeTrackerMeta(tokenKey, dexName, priceFloat, tokenInfo),
+        });
         const liqTime = liquidityAddedTime.get(tokenKey) || 0;
         const isSnipe = (Date.now() - liqTime) <= SNIPE_WINDOW_MS;
         await alertFirstBuy({
@@ -332,7 +376,6 @@ async function watchV2Factory(provider, factoryAddress, dexName) {
         deployer = tx?.from || "unknown";
       } catch {}
 
-      // Check blacklists before doing anything
       const tokenInfo = await getTokenInfo(provider, newToken);
 
       if (isBlacklistedDeployer(deployer)) {
@@ -361,7 +404,6 @@ async function watchV2Factory(provider, factoryAddress, dexName) {
         deployerHistory: "⏳ Checking...",
       });
 
-      // Check if liquidity already added in same tx
       try {
         const pair = new ethers.Contract(pairAddress, UNISWAP_V2_PAIR_ABI, provider);
         const [reserve0, reserve1] = await pair.getReserves();
@@ -541,7 +583,11 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
 
       if (!firstBuyDone.has(tokenKey)) {
         firstBuyDone.add(tokenKey);
-        priceTrackers.set(tokenKey, { firstBuyPrice: priceFloat, nextMilestone: MILESTONES[0] });
+        priceTrackers.set(tokenKey, {
+          firstBuyPrice: priceFloat,
+          nextMilestone: MILESTONES[0],
+          meta: makeTrackerMeta(tokenKey, dexName, priceFloat, tokenInfo),
+        });
         const liqTime = liquidityAddedTime.get(tokenKey) || 0;
         const isSnipe = (Date.now() - liqTime) <= SNIPE_WINDOW_MS;
         await alertFirstBuy({
