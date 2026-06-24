@@ -122,6 +122,7 @@ async function checkPriceMilestone(tokenAddress, name, symbol, currentPrice) {
       if (milestone >= 200 && !tracker.loggedToSheet) {
         tracker.loggedToSheet = true;
         const meta = tracker.meta || {};
+        const timeToMilestoneMs = Date.now() - (meta.liquidityAddedAt || Date.now());
         logQualifyingToken({
           name, symbol, address: tokenAddress,
           deployer: meta.deployer || "",
@@ -134,6 +135,7 @@ async function checkPriceMilestone(tokenAddress, name, symbol, currentPrice) {
           buyTax: meta.buyTax || "",
           sellTax: meta.sellTax || "",
           deployerHistory: meta.deployerHistory || "",
+          timeToMilestoneMs,
         }).catch(() => {});
       }
 
