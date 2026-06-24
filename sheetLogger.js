@@ -39,10 +39,23 @@ async function logQualifyingToken({
   name, symbol, address, deployer, dex,
   mcap, gainPct, liquidityUSD, lpStatus,
   safetyStatus, buyTax, sellTax, deployerHistory,
+  timeToMilestoneMs,
 }) {
   try {
     const sheets = await getSheetsClient();
     if (!sheets) return;
+
+    let timeToMilestoneStr = "";
+    if (timeToMilestoneMs && timeToMilestoneMs > 0) {
+      const totalMinutes = Math.round(timeToMilestoneMs / 60000);
+      if (totalMinutes < 60) {
+        timeToMilestoneStr = totalMinutes + "m";
+      } else {
+        const hours = Math.floor(totalMinutes / 60);
+        const mins = totalMinutes % 60;
+        timeToMilestoneStr = hours + "h " + mins + "m";
+      }
+    }
 
     const row = [
       new Date().toISOString(),
@@ -59,17 +72,18 @@ async function logQualifyingToken({
       buyTax || "",
       sellTax || "",
       deployerHistory || "",
+      timeToMilestoneStr,
     ];
 
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: "Sheet1!A:N",
+      range: "Sheet1!A:O",
       valueInputOption: "USER_ENTERED",
       insertDataOption: "INSERT_ROWS",
       requestBody: { values: [row] },
     });
 
-    console.log("Logged to sheet: " + symbol + " at " + gainPct + "%");
+    console.log("Logged to sheet: " + symbol + " at " + gainPct + "% (took " + timeToMilestoneStr + ")");
   } catch (err) {
     console.error("Sheet log error:", err.message);
   }
