@@ -40,6 +40,8 @@ const qualifiedTokens    = new Set();
 const deployerMap        = new Map();
 const dexMap             = new Map();
 const liquidityAddedTime = new Map();
+// Stores safety/liquidity data independently of tracker creation timing
+const tokenSafetyData    = new Map();
 
 const MILESTONES      = [50, 100, 150, 200, 300, 500, 1000];
 const MIN_LIQ_USD     = Number(process.env.MIN_LIQUIDITY_USD || 2000);
@@ -93,16 +95,17 @@ function calcPrice(baseFloat, baseSymbol, tokFloat, ethPrice) {
 }
 
 function makeTrackerMeta(tokenKey, dexName, priceFloat, tokenInfo) {
+  const saved = tokenSafetyData.get(tokenKey) || {};
   return {
     deployer: deployerMap.get(tokenKey) || "",
     dex: dexMap.get(tokenKey) || dexName || "",
     mcap: formatMcap(priceFloat * (tokenInfo.totalSupply || 0)),
-    liquidityUSD: "",
-    lpStatus: "",
-    safetyStatus: "",
-    buyTax: "",
-    sellTax: "",
-    deployerHistory: "",
+    liquidityUSD: saved.liquidityUSD || "",
+    lpStatus: saved.lpStatus || "",
+    safetyStatus: saved.safetyStatus || "",
+    buyTax: saved.buyTax || "",
+    sellTax: saved.sellTax || "",
+    deployerHistory: saved.deployerHistory || "",
     liquidityAddedAt: liquidityAddedTime.get(tokenKey) || Date.now(),
   };
 }
@@ -131,7 +134,6 @@ async function checkPriceMilestone(tokenAddress, name, symbol, currentPrice) {
   if (!tracker || !tracker.firstBuyPrice) return;
   const gainPct = ((currentPrice - tracker.firstBuyPrice) / tracker.firstBuyPrice) * 100;
 
-  // Log to sheet at 200% (once) and 1000% (once), independent of the alert loop below
   if (gainPct >= 200 && !tracker.logged200) {
     tracker.logged200 = true;
     await logMilestoneToSheet(tokenAddress, name, symbol, 200, tracker);
@@ -170,15 +172,24 @@ async function sendLiquidityAlert({ tokenInfo, newToken, baseFloat, tokFloat, ba
   trackLiquidity(deployer, newToken, tokenInfo.symbol);
 
   const tokenKey = newToken.toLowerCase();
+
+  // Save safety/liquidity data in its own map — survives regardless of
+  // whether a priceTracker exists yet at this point in time
+  const safetyEntry = {
+    liquidityUSD: valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 }),
+    lpStatus: lpStatus || "",
+    safetyStatus: honeypot?.status || "",
+    buyTax: honeypot?.buyTax || "",
+    sellTax: honeypot?.sellTax || "",
+    deployerHistory: deployerHistory || "",
+  };
+  tokenSafetyData.set(tokenKey, safetyEntry);
+
+  // If a tracker already exists (first buy happened before this resolved), update it too
   const existingTracker = priceTrackers.get(tokenKey);
   if (existingTracker) {
     existingTracker.meta = existingTracker.meta || {};
-    existingTracker.meta.liquidityUSD = valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 });
-    existingTracker.meta.lpStatus = lpStatus || "";
-    existingTracker.meta.safetyStatus = honeypot?.status || "";
-    existingTracker.meta.buyTax = honeypot?.buyTax || "";
-    existingTracker.meta.sellTax = honeypot?.sellTax || "";
-    existingTracker.meta.deployerHistory = deployerHistory || "";
+    Object.assign(existingTracker.meta, safetyEntry);
     priceTrackers.set(tokenKey, existingTracker);
   }
 
