@@ -107,10 +107,40 @@ function makeTrackerMeta(tokenKey, dexName, priceFloat, tokenInfo) {
   };
 }
 
+async function logMilestoneToSheet(tokenAddress, name, symbol, milestone, tracker) {
+  const meta = tracker.meta || {};
+  const timeToMilestoneMs = Date.now() - (meta.liquidityAddedAt || Date.now());
+  await logQualifyingToken({
+    name, symbol, address: tokenAddress,
+    deployer: meta.deployer || "",
+    dex: meta.dex || "",
+    mcap: meta.mcap || "",
+    gainPct: milestone,
+    liquidityUSD: meta.liquidityUSD || "",
+    lpStatus: meta.lpStatus || "",
+    safetyStatus: meta.safetyStatus || "",
+    buyTax: meta.buyTax || "",
+    sellTax: meta.sellTax || "",
+    deployerHistory: meta.deployerHistory || "",
+    timeToMilestoneMs,
+  }).catch(() => {});
+}
+
 async function checkPriceMilestone(tokenAddress, name, symbol, currentPrice) {
   const tracker = priceTrackers.get(tokenAddress.toLowerCase());
   if (!tracker || !tracker.firstBuyPrice) return;
   const gainPct = ((currentPrice - tracker.firstBuyPrice) / tracker.firstBuyPrice) * 100;
+
+  // Log to sheet at 200% (once) and 1000% (once), independent of the alert loop below
+  if (gainPct >= 200 && !tracker.logged200) {
+    tracker.logged200 = true;
+    await logMilestoneToSheet(tokenAddress, name, symbol, 200, tracker);
+  }
+  if (gainPct >= 1000 && !tracker.logged1000) {
+    tracker.logged1000 = true;
+    await logMilestoneToSheet(tokenAddress, name, symbol, 1000, tracker);
+  }
+
   for (const milestone of MILESTONES) {
     if (gainPct >= milestone && tracker.nextMilestone <= milestone) {
       await alertPriceMilestone({
@@ -119,27 +149,6 @@ async function checkPriceMilestone(tokenAddress, name, symbol, currentPrice) {
         currentPrice: formatPrice(currentPrice),
         fromPrice: formatPrice(tracker.firstBuyPrice),
       });
-
-      if (milestone >= 200 && !tracker.loggedToSheet) {
-        tracker.loggedToSheet = true;
-        const meta = tracker.meta || {};
-        const timeToMilestoneMs = Date.now() - (meta.liquidityAddedAt || Date.now());
-        logQualifyingToken({
-          name, symbol, address: tokenAddress,
-          deployer: meta.deployer || "",
-          dex: meta.dex || "",
-          mcap: meta.mcap || "",
-          gainPct: milestone,
-          liquidityUSD: meta.liquidityUSD || "",
-          lpStatus: meta.lpStatus || "",
-          safetyStatus: meta.safetyStatus || "",
-          buyTax: meta.buyTax || "",
-          sellTax: meta.sellTax || "",
-          deployerHistory: meta.deployerHistory || "",
-          timeToMilestoneMs,
-        }).catch(() => {});
-      }
-
       const nextIdx = MILESTONES.indexOf(milestone) + 1;
       tracker.nextMilestone = nextIdx < MILESTONES.length ? MILESTONES[nextIdx] : 999999;
       priceTrackers.set(tokenAddress.toLowerCase(), tracker);
