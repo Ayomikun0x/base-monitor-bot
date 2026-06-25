@@ -103,6 +103,7 @@ function makeTrackerMeta(tokenKey, dexName, priceFloat, tokenInfo) {
     buyTax: "",
     sellTax: "",
     deployerHistory: "",
+    liquidityAddedAt: liquidityAddedTime.get(tokenKey) || Date.now(),
   };
 }
 
@@ -159,7 +160,6 @@ async function sendLiquidityAlert({ tokenInfo, newToken, baseFloat, tokFloat, ba
 
   trackLiquidity(deployer, newToken, tokenInfo.symbol);
 
-  // Attach safety/liquidity data to tracker meta if it already exists
   const tokenKey = newToken.toLowerCase();
   const existingTracker = priceTrackers.get(tokenKey);
   if (existingTracker) {
