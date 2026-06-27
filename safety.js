@@ -13,6 +13,10 @@ const TRANSFER_ABI = [
   "event Transfer(address indexed from, address indexed to, uint256 value)"
 ];
 
+// Minimum LP token amount (in raw units) to count as a "real" transfer,
+// not dust from internal rounding during the mint calculation
+const DUST_THRESHOLD = ethers.parseUnits("0.0001", 18);
+
 async function checkLPLock(provider, pairAddress, txHash) {
   try {
     const receipt = await Promise.race([
@@ -20,19 +24,37 @@ async function checkLPLock(provider, pairAddress, txHash) {
       new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000))
     ]);
     if (!receipt) return "🔓 Unlocked ⚠️";
+
     const iface = new ethers.Interface(TRANSFER_ABI);
+    const lpTransfers = [];
+
     for (const log of receipt.logs) {
       if (log.address.toLowerCase() !== pairAddress.toLowerCase()) continue;
       try {
         const parsed = iface.parseLog({ topics: log.topics, data: log.data });
         if (parsed && parsed.name === "Transfer") {
-          const to = parsed.args.to.toLowerCase();
-          for (const [addr, name] of Object.entries(LP_LOCKERS)) {
-            if (to === addr.toLowerCase()) return `🔒 Locked · ${name}`;
-          }
+          lpTransfers.push({
+            to: parsed.args.to.toLowerCase(),
+            from: parsed.args.from.toLowerCase(),
+            value: parsed.args.value,
+          });
         }
       } catch {}
     }
+
+    // Ignore dust transfers (rounding artifacts from the mint math)
+    const realTransfers = lpTransfers.filter(t => t.value >= DUST_THRESHOLD);
+    if (realTransfers.length === 0) return "🔓 Unlocked ⚠️";
+
+    // Only trust the LAST real transfer — that's where the LP tokens actually ended up
+    const finalTransfer = realTransfers[realTransfers.length - 1];
+
+    for (const [addr, name] of Object.entries(LP_LOCKERS)) {
+      if (finalTransfer.to === addr.toLowerCase()) {
+        return `🔒 Locked · ${name}`;
+      }
+    }
+
     return "🔓 Unlocked ⚠️";
   } catch {
     return "🔓 Unlocked ⚠️";
