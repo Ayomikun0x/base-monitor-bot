@@ -12,7 +12,42 @@ const LP_LOCKERS = {
 const TRANSFER_ABI = [
   "event Transfer(address indexed from, address indexed to, uint256 value)"
 ];
+// Check if the deployer sent tokens to other wallets shortly before liquidity was added
+async function checkPreLiquidityTransfers(provider, tokenAddress, deployerAddress, pairCreatedBlock) {
+  try {
+    const LOOKBACK_BLOCKS = 300; // roughly ~10 min on Base
+    const fromBlock = Math.max(0, pairCreatedBlock - LOOKBACK_BLOCKS);
 
+    const tokenContract = new ethers.Contract(tokenAddress, TRANSFER_ABI, provider);
+    const filter = tokenContract.filters.Transfer(deployerAddress, null);
+
+    const events = await Promise.race([
+      tokenContract.queryFilter(filter, fromBlock, pairCreatedBlock),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 8000))
+    ]);
+
+    if (!events || events.length === 0) {
+      return { hasPreLiquidityTransfers: false, recipients: [] };
+    }
+
+    // Collect unique recipient wallets (excluding the deployer sending to themselves, if that happens)
+    const recipients = new Set();
+    for (const ev of events) {
+      const to = ev.args?.to?.toLowerCase();
+      if (to && to !== deployerAddress.toLowerCase()) {
+        recipients.add(to);
+      }
+    }
+
+    return {
+      hasPreLiquidityTransfers: recipients.size > 0,
+      recipients: Array.from(recipients),
+    };
+  } catch {
+    // If the check fails (timeout, RPC error), don't block the alert — just report unknown
+    return { hasPreLiquidityTransfers: false, recipients: [], error: true };
+  }
+}
 // Minimum LP token amount (in raw units) to count as a "real" transfer,
 // not dust from internal rounding during the mint calculation
 const DUST_THRESHOLD = ethers.parseUnits("0.0001", 18);
@@ -110,4 +145,4 @@ async function checkDeployerHistory(deployerAddress) {
   }
 }
 
-module.exports = { checkLPLock, checkHoneypot, checkDeployerHistory };
+module.exports = { checkLPLock, checkHoneypot, checkDeployerHistory, checkPreLiquidityTransfers };
