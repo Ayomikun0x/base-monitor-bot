@@ -30,19 +30,26 @@ async function sendAlert(message, { tokenAddress, silent = false } = {}) {
   }
 }
 
-function alertNewToken({ name, symbol, address, deployer, txHash, dex, deployerHistory, honeypot }) {
+function alertNewToken({ name, symbol, address, deployer, txHash, dex, deployerHistory, honeypot, preLiqRecipients }) {
   const hp = honeypot || {};
-  const hpText = hp.status || "⏳ Checking...";
-  const taxText = (hp.buyTax && hp.buyTax !== "") ? `  Buy ${hp.buyTax}%  Sell ${hp.sellTax}%` : "";
+  const hpText = hp.status || "❓ Unknown";
+  const taxText = (hp.buyTax && hp.buyTax !== "?") ? `  Buy ${hp.buyTax}%  Sell ${hp.sellTax}%` : "";
   const flagText = (hp.flags && hp.flags.length) ? `\n⚑  ${hp.flags.join(" · ")}` : "";
+
+  let preLiqWarning = "";
+  if (preLiqRecipients && preLiqRecipients.length > 0) {
+    const list = preLiqRecipients.map(r => shortAddr(r)).join(", ");
+    preLiqWarning = `\n\n🚨 <b>PRE-LIQUIDITY TRANSFERS DETECTED</b>\nDeployer sent tokens before liquidity was added:\n${list}`;
+  }
 
   return sendAlert(
     `🆕 <b>NEW TOKEN</b>\n\n` +
     `<b>${name}</b>  <code>$${symbol}</code>  ·  ${dex}\n\n` +
     `🍯 Safety    ${hpText}${taxText}${flagText}\n` +
     `👤 Deployer  <a href="https://basescan.org/address/${deployer}">${shortAddr(deployer)}</a>\n` +
-    `📋 History   ${deployerHistory || "⏳ Checking..."}\n` +
-    `📍 Contract  <code>${address}</code>\n\n` +
+    `📋 History   ${deployerHistory || "❓ Unknown"}\n` +
+    `📍 Contract  <code>${address}</code>` +
+    `${preLiqWarning}\n\n` +
     `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${address}">GMGN</a>  ·  <a href="https://basescan.org/token/${address}">Basescan</a>`,
     { tokenAddress: address }
   );
