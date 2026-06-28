@@ -40,10 +40,10 @@ const qualifiedTokens    = new Set();
 const deployerMap        = new Map();
 const dexMap             = new Map();
 const liquidityAddedTime = new Map();
-// Stores safety/liquidity data independently of tracker creation timing
 const tokenSafetyData    = new Map();
 
-const MILESTONES      = [50, 100, 150, 200, 300, 500, 1000];
+// Percentage-gain thresholds internally, displayed as multiples (2x, 3x, 5x, 10x, 20x, 50x, 100x)
+const MILESTONES      = [100, 200, 400, 900, 1900, 4900, 9900];
 const MIN_LIQ_USD     = Number(process.env.MIN_LIQUIDITY_USD || 2000);
 const SNIPE_WINDOW_MS = 60000;
 
@@ -94,6 +94,11 @@ function calcPrice(baseFloat, baseSymbol, tokFloat, ethPrice) {
   return baseUSD / tokFloat;
 }
 
+// Convert a percentage-gain milestone into its multiple label (e.g. 200 -> "3x")
+function toMultiple(gainPct) {
+  return Math.round((gainPct / 100) + 1) + "x";
+}
+
 function makeTrackerMeta(tokenKey, dexName, priceFloat, tokenInfo) {
   const saved = tokenSafetyData.get(tokenKey) || {};
   return {
@@ -118,7 +123,7 @@ async function logMilestoneToSheet(tokenAddress, name, symbol, milestone, tracke
     deployer: meta.deployer || "",
     dex: meta.dex || "",
     mcap: meta.mcap || "",
-    gainPct: milestone,
+    gainPct: toMultiple(milestone),
     liquidityUSD: meta.liquidityUSD || "",
     lpStatus: meta.lpStatus || "",
     safetyStatus: meta.safetyStatus || "",
@@ -134,13 +139,14 @@ async function checkPriceMilestone(tokenAddress, name, symbol, currentPrice) {
   if (!tracker || !tracker.firstBuyPrice) return;
   const gainPct = ((currentPrice - tracker.firstBuyPrice) / tracker.firstBuyPrice) * 100;
 
-  if (gainPct >= 200 && !tracker.logged200) {
+  // Log to sheet at 2x (first real win) and again at 10x (big win)
+  if (gainPct >= 100 && !tracker.logged200) {
     tracker.logged200 = true;
-    await logMilestoneToSheet(tokenAddress, name, symbol, 200, tracker);
+    await logMilestoneToSheet(tokenAddress, name, symbol, 100, tracker);
   }
-  if (gainPct >= 1000 && !tracker.logged1000) {
+  if (gainPct >= 900 && !tracker.logged1000) {
     tracker.logged1000 = true;
-    await logMilestoneToSheet(tokenAddress, name, symbol, 1000, tracker);
+    await logMilestoneToSheet(tokenAddress, name, symbol, 900, tracker);
   }
 
   for (const milestone of MILESTONES) {
@@ -148,6 +154,7 @@ async function checkPriceMilestone(tokenAddress, name, symbol, currentPrice) {
       await alertPriceMilestone({
         name, symbol, tokenAddress,
         gainPct: milestone,
+        multiple: toMultiple(milestone),
         currentPrice: formatPrice(currentPrice),
         fromPrice: formatPrice(tracker.firstBuyPrice),
       });
@@ -173,8 +180,6 @@ async function sendLiquidityAlert({ tokenInfo, newToken, baseFloat, tokFloat, ba
 
   const tokenKey = newToken.toLowerCase();
 
-  // Save safety/liquidity data in its own map — survives regardless of
-  // whether a priceTracker exists yet at this point in time
   const safetyEntry = {
     liquidityUSD: valueUSD.toLocaleString("en-US", { maximumFractionDigits: 2 }),
     lpStatus: lpStatus || "",
@@ -185,7 +190,6 @@ async function sendLiquidityAlert({ tokenInfo, newToken, baseFloat, tokFloat, ba
   };
   tokenSafetyData.set(tokenKey, safetyEntry);
 
-  // If a tracker already exists (first buy happened before this resolved), update it too
   const existingTracker = priceTrackers.get(tokenKey);
   if (existingTracker) {
     existingTracker.meta = existingTracker.meta || {};
