@@ -65,7 +65,7 @@ async function logQualifyingToken({
       deployer || "",
       dex || "",
       mcap || "",
-      gainPct ? gainPct + "%" : "",
+      gainPct || "",
       liquidityUSD || "",
       lpStatus || "",
       safetyStatus || "",
