@@ -23,7 +23,7 @@ const {
 
 const { getTokenInfo }                                     = require("./tokenInfo");
 const { getEthPriceUSD }                                   = require("./price");
-const { checkLPLock, checkHoneypot, checkDeployerHistory }  = require("./safety");
+const { checkLPLock, checkHoneypot, checkDeployerHistory, checkPreLiquidityTransfers } = require("./safety");
 const { logQualifyingToken }                                = require("./sheetLogger");
 const {
   isBlacklistedDeployer,
@@ -42,7 +42,6 @@ const dexMap             = new Map();
 const liquidityAddedTime = new Map();
 const tokenSafetyData    = new Map();
 
-// Percentage-gain thresholds internally, displayed as multiples (2x, 3x, 5x, 10x, 20x, 50x, 100x)
 const MILESTONES      = [100, 200, 400, 900, 1900, 4900, 9900];
 const MIN_LIQ_USD     = Number(process.env.MIN_LIQUIDITY_USD || 2000);
 const SNIPE_WINDOW_MS = 60000;
@@ -94,7 +93,6 @@ function calcPrice(baseFloat, baseSymbol, tokFloat, ethPrice) {
   return baseUSD / tokFloat;
 }
 
-// Convert a percentage-gain milestone into its multiple label (e.g. 200 -> "3x")
 function toMultiple(gainPct) {
   return Math.round((gainPct / 100) + 1) + "x";
 }
@@ -139,7 +137,6 @@ async function checkPriceMilestone(tokenAddress, name, symbol, currentPrice) {
   if (!tracker || !tracker.firstBuyPrice) return;
   const gainPct = ((currentPrice - tracker.firstBuyPrice) / tracker.firstBuyPrice) * 100;
 
-  // Log to sheet at 2x (first real win) and again at 10x (big win)
   if (gainPct >= 100 && !tracker.logged200) {
     tracker.logged200 = true;
     await logMilestoneToSheet(tokenAddress, name, symbol, 100, tracker);
@@ -421,6 +418,16 @@ async function watchV2Factory(provider, factoryAddress, dexName) {
       qualifiedTokens.add(tokenKey);
       liquidityAddedTime.set(tokenKey, Date.now());
 
+      // Check for pre-liquidity transfers before sending the alert
+      let preLiqWarning = null;
+      try {
+        const pairBlockNumber = event.log?.blockNumber || (await provider.getBlockNumber());
+        const preLiqResult = await checkPreLiquidityTransfers(provider, newToken, deployer, pairBlockNumber);
+        if (preLiqResult.hasPreLiquidityTransfers) {
+          preLiqWarning = preLiqResult.recipients;
+        }
+      } catch {}
+
       await alertNewToken({
         name: tokenInfo.name, symbol: tokenInfo.symbol,
         address: newToken, deployer,
@@ -428,6 +435,7 @@ async function watchV2Factory(provider, factoryAddress, dexName) {
         dex: dexName,
         honeypot: { status: "⏳ Checking...", buyTax: "", sellTax: "", flags: [] },
         deployerHistory: "⏳ Checking...",
+        preLiqRecipients: preLiqWarning,
       });
 
       try {
@@ -505,6 +513,15 @@ async function watchV3Factory(provider, factoryAddress, dexName) {
       qualifiedTokens.add(tokenKey);
       liquidityAddedTime.set(tokenKey, Date.now());
 
+      let preLiqWarning = null;
+      try {
+        const poolBlockNumber = event.log?.blockNumber || (await provider.getBlockNumber());
+        const preLiqResult = await checkPreLiquidityTransfers(provider, newToken, deployer, poolBlockNumber);
+        if (preLiqResult.hasPreLiquidityTransfers) {
+          preLiqWarning = preLiqResult.recipients;
+        }
+      } catch {}
+
       await alertNewToken({
         name: tokenInfo.name, symbol: tokenInfo.symbol,
         address: newToken, deployer,
@@ -512,6 +529,7 @@ async function watchV3Factory(provider, factoryAddress, dexName) {
         dex: fullDex,
         honeypot: { status: "⏳ Checking...", buyTax: "", sellTax: "", flags: [] },
         deployerHistory: "⏳ Checking...",
+        preLiqRecipients: preLiqWarning,
       });
 
       watchV3Pool(provider, poolAddress, token0, token1, dexName, tokenInfo);
