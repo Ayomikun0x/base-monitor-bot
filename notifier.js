@@ -141,12 +141,12 @@ function alertLiquidityRemoved({ name, symbol, tokenAddress, provider, baseAmoun
   );
 }
 
-function alertPriceMilestone({ name, symbol, tokenAddress, gainPct, currentPrice, fromPrice }) {
-  const emoji = gainPct >= 200 ? "🚀" : gainPct >= 100 ? "💎" : "📈";
+function alertPriceMilestone({ name, symbol, tokenAddress, gainPct, multiple, currentPrice, fromPrice }) {
+  const emoji = gainPct >= 900 ? "🚀" : gainPct >= 200 ? "💎" : "📈";
   return sendAlert(
-    `${emoji} <b>${gainPct}% GAIN!</b>\n\n` +
+    `${emoji} <b>${multiple} GAIN!</b>\n\n` +
     `<b>${name}</b>  <code>$${symbol}</code>\n\n` +
-    `📈 Gain      <b>+${gainPct}%</b> since first buy\n` +
+    `📈 Gain      <b>${multiple}</b> since first buy\n` +
     `💲 Now       <b>$${currentPrice}</b>\n` +
     `🏁 Started   $${fromPrice}\n\n` +
     `📍 Contract  <code>${tokenAddress}</code>\n` +
