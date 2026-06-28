@@ -144,5 +144,30 @@ async function checkDeployerHistory(deployerAddress) {
     return "❓ Unknown";
   }
 }
+// Check current pool reserves against the original liquidity amount to detect a drain
+async function checkReservesDrained(provider, pairAddress, originalLiquidityUSD, isToken0New, baseDecimals, ethPriceUSD, isEth) {
+  try {
+    const pairAbi = ["function getReserves() view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)"];
+    const pair = new ethers.Contract(pairAddress, pairAbi, provider);
+    const [reserve0, reserve1] = await Promise.race([
+      pair.getReserves(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 6000))
+    ]);
 
-module.exports = { checkLPLock, checkHoneypot, checkDeployerHistory, checkPreLiquidityTransfers };
+    const baseReserveRaw = isToken0New ? reserve1 : reserve0;
+    const baseReserveFloat = parseFloat(ethers.formatUnits(baseReserveRaw, baseDecimals));
+    const currentLiquidityUSD = isEth ? baseReserveFloat * ethPriceUSD : baseReserveFloat;
+
+    const original = parseFloat(String(originalLiquidityUSD).replace(/,/g, "")) || 0;
+    if (original === 0) return { drained: false, currentLiquidityUSD, pctRemaining: null };
+
+    const pctRemaining = (currentLiquidityUSD / original) * 100;
+    const drained = pctRemaining < 10; // less than 10% of original liquidity left
+
+    return { drained, currentLiquidityUSD, pctRemaining };
+  } catch {
+    return { drained: false, currentLiquidityUSD: null, pctRemaining: null, error: true };
+  }
+}
+
+module.exports = { checkLPLock, checkHoneypot, checkDeployerHistory, checkPreLiquidityTransfers, checkReservesDrained };
