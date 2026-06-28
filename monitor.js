@@ -23,7 +23,7 @@ const {
 
 const { getTokenInfo }                                     = require("./tokenInfo");
 const { getEthPriceUSD }                                   = require("./price");
-const { checkLPLock, checkHoneypot, checkDeployerHistory, checkPreLiquidityTransfers } = require("./safety");
+const { checkLPLock, checkHoneypot, checkDeployerHistory, checkPreLiquidityTransfers, checkReservesDrained } = require("./safety");
 const { logQualifyingToken }                                = require("./sheetLogger");
 const {
   isBlacklistedDeployer,
@@ -42,9 +42,15 @@ const dexMap             = new Map();
 const liquidityAddedTime = new Map();
 const tokenSafetyData    = new Map();
 
+// Drain-clock tracking — only for tokens that have hit 2x (100% gain)
+const drainWatchList     = new Map(); // tokenKey -> { pairAddress, startedAt, deployer, isToken0New, baseDecimals, isEth, originalLiquidityUSD, name, symbol }
+const deployerDrainHistory = new Map(); // deployer -> array of { symbol, minutesFrom2xToDrain }
+
 const MILESTONES      = [100, 200, 400, 900, 1900, 4900, 9900];
 const MIN_LIQ_USD     = Number(process.env.MIN_LIQUIDITY_USD || 2000);
 const SNIPE_WINDOW_MS = 60000;
+const DRAIN_CHECK_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+const DRAIN_WATCH_MAX_HOURS = 6;
 
 function getNewToken(token0, token1) {
   const t0 = token0.toLowerCase();
@@ -132,6 +138,60 @@ async function logMilestoneToSheet(tokenAddress, name, symbol, milestone, tracke
   }).catch(() => {});
 }
 
+// Start the drain-clock for a token the moment it hits 2x
+function startDrainWatch(tokenKey, pairAddress, deployer, isToken0New, baseDecimals, isEth, originalLiquidityUSD, name, symbol) {
+  if (drainWatchList.has(tokenKey)) return; // already watching
+  drainWatchList.set(tokenKey, {
+    pairAddress, deployer, isToken0New, baseDecimals, isEth,
+    originalLiquidityUSD: originalLiquidityUSD || "0",
+    name, symbol,
+    startedAt: Date.now(),
+  });
+  console.log("Drain-watch started: " + symbol + " (deployer " + deployer.slice(0,8) + "...)");
+}
+
+// Record a confirmed drain into the per-deployer history
+function recordDrain(deployer, symbol, minutesFrom2xToDrain) {
+  const key = deployer.toLowerCase();
+  if (!deployerDrainHistory.has(key)) deployerDrainHistory.set(key, []);
+  deployerDrainHistory.get(key).push({ symbol, minutesFrom2xToDrain, recordedAt: Date.now() });
+  console.log("🚨 Drain recorded: " + symbol + " by " + deployer.slice(0,8) + "... took " + minutesFrom2xToDrain + " min from 2x");
+}
+
+// Get a deployer's drain history summary (for future use in alerts/sheets)
+function getDeployerDrainProfile(deployer) {
+  const key = deployer.toLowerCase();
+  const history = deployerDrainHistory.get(key) || [];
+  if (history.length === 0) return null;
+  const avgMinutes = history.reduce((sum, h) => sum + h.minutesFrom2xToDrain, 0) / history.length;
+  return { count: history.length, avgMinutesFrom2xToDrain: Math.round(avgMinutes), history };
+}
+
+// Periodic check — runs every 10 minutes, scans the drain watch list
+async function runDrainChecks(provider) {
+  const ethPrice = await getEthPriceUSD().catch(() => 0);
+  const now = Date.now();
+
+  for (const [tokenKey, watch] of drainWatchList.entries()) {
+    const ageHours = (now - watch.startedAt) / (1000 * 60 * 60);
+    if (ageHours > DRAIN_WATCH_MAX_HOURS) {
+      drainWatchList.delete(tokenKey);
+      continue;
+    }
+
+    const result = await checkReservesDrained(
+      provider, watch.pairAddress, watch.originalLiquidityUSD,
+      watch.isToken0New, watch.baseDecimals, ethPrice, watch.isEth
+    );
+
+    if (result.drained) {
+      const minutesFrom2xToDrain = Math.round((now - watch.startedAt) / 60000);
+      recordDrain(watch.deployer, watch.symbol, minutesFrom2xToDrain);
+      drainWatchList.delete(tokenKey); // stop watching, it's confirmed drained
+    }
+  }
+}
+
 async function checkPriceMilestone(tokenAddress, name, symbol, currentPrice) {
   const tracker = priceTrackers.get(tokenAddress.toLowerCase());
   if (!tracker || !tracker.firstBuyPrice) return;
@@ -140,6 +200,15 @@ async function checkPriceMilestone(tokenAddress, name, symbol, currentPrice) {
   if (gainPct >= 100 && !tracker.logged200) {
     tracker.logged200 = true;
     await logMilestoneToSheet(tokenAddress, name, symbol, 100, tracker);
+
+    // Start the drain-watch clock now that this token has confirmed 2x
+    const meta = tracker.meta || {};
+    const tokenKey = tokenAddress.toLowerCase();
+    startDrainWatch(
+      tokenKey, tracker.pairAddress, meta.deployer,
+      tracker.isToken0New, tracker.baseDecimals, tracker.isEth,
+      meta.liquidityUSD, name, symbol
+    );
   }
   if (gainPct >= 900 && !tracker.logged1000) {
     tracker.logged1000 = true;
@@ -342,6 +411,9 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
         baseAmount: baseFloat.toFixed(4), baseSymbol,
         tokenAmount: tokFloat, removedPct, txHash,
       });
+
+      // A confirmed Burn event also means drained — stop the drain-watch if it was running
+      drainWatchList.delete(tokenKey);
     } catch (err) { console.error("Burn error:", err.message); }
   });
 
@@ -364,6 +436,7 @@ async function watchV2Pair(provider, pairAddress, token0, token1, dexName) {
           firstBuyPrice: priceFloat,
           nextMilestone: MILESTONES[0],
           meta: makeTrackerMeta(tokenKey, dexName, priceFloat, tokenInfo),
+          pairAddress, isToken0New, baseDecimals, isEth,
         });
         const liqTime = liquidityAddedTime.get(tokenKey) || 0;
         const isSnipe = (Date.now() - liqTime) <= SNIPE_WINDOW_MS;
@@ -418,7 +491,6 @@ async function watchV2Factory(provider, factoryAddress, dexName) {
       qualifiedTokens.add(tokenKey);
       liquidityAddedTime.set(tokenKey, Date.now());
 
-      // Check for pre-liquidity transfers before sending the alert
       let preLiqWarning = null;
       try {
         const pairBlockNumber = event.log?.blockNumber || (await provider.getBlockNumber());
@@ -607,6 +679,8 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
         baseAmount: baseFloat.toFixed(4), baseSymbol,
         tokenAmount: tokFloat, removedPct: "V3", txHash,
       });
+
+      drainWatchList.delete(tokenKey);
     } catch (err) { console.error("V3 Burn error:", err.message); }
   });
 
@@ -631,6 +705,7 @@ async function watchV3Pool(provider, poolAddress, token0, token1, dexName, token
           firstBuyPrice: priceFloat,
           nextMilestone: MILESTONES[0],
           meta: makeTrackerMeta(tokenKey, dexName, priceFloat, tokenInfo),
+          pairAddress: poolAddress, isToken0New, baseDecimals, isEth,
         });
         const liqTime = liquidityAddedTime.get(tokenKey) || 0;
         const isSnipe = (Date.now() - liqTime) <= SNIPE_WINDOW_MS;
@@ -658,7 +733,14 @@ async function startMonitor(provider) {
   for (const { address, name } of V3_FACTORIES) await watchV3Factory(provider, address, name);
   const total = V2_FACTORIES.length + V3_FACTORIES.length;
   console.log("Monitoring " + total + " DEX factories on Base mainnet");
+
+  // Start the periodic drain-watch checker
+  setInterval(() => {
+    runDrainChecks(provider).catch(err => console.error("Drain check error:", err.message));
+  }, DRAIN_CHECK_INTERVAL_MS);
+  console.log("Drain-watch checker started — every " + (DRAIN_CHECK_INTERVAL_MS / 60000) + " min, max " + DRAIN_WATCH_MAX_HOURS + "h per token");
+
   return total;
 }
 
-module.exports = { startMonitor };
+module.exports = { startMonitor, getDeployerDrainProfile };
