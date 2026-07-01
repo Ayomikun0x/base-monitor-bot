@@ -41,7 +41,18 @@ function alertNewToken({ name, symbol, address, deployer, txHash, dex, deployerH
     const list = preLiqRecipients.map(r => shortAddr(r)).join(", ");
     preLiqWarning = `\n\n🚨 <b>PRE-LIQUIDITY TRANSFERS DETECTED</b>\nDeployer sent tokens before liquidity was added:\n${list}`;
   }
-
+function alertWhitelistedDeployer({ name, symbol, address, deployer, txHash, dex }) {
+  return sendAlert(
+    `⭐ <b>PRIORITY ALERT — KNOWN WINNER WALLET</b>\n\n` +
+    `<b>${name}</b>  <code>$${symbol}</code>  ·  ${dex}\n\n` +
+    `🏆 This deployer has a proven track record of 2x+ tokens!\n` +
+    `⚡ Historically hits 2x in under 5 minutes!\n\n` +
+    `👤 Deployer  <a href="https://basescan.org/address/${deployer}">${shortAddr(deployer)}</a>\n` +
+    `📍 Contract  <code>${address}</code>\n\n` +
+    `🔗 <a href="https://basescan.org/tx/${txHash}">TX</a>  ·  <a href="https://gmgn.ai/base/token/${address}">GMGN</a>  ·  <a href="https://basescan.org/token/${address}">Basescan</a>`,
+    { tokenAddress: address + "_priority" }
+  );
+}
   return sendAlert(
     `🆕 <b>NEW TOKEN</b>\n\n` +
     `<b>${name}</b>  <code>$${symbol}</code>  ·  ${dex}\n\n` +
@@ -193,7 +204,7 @@ function formatNumber(n) {
 }
 
 module.exports = {
-  initBot, sendAlert, alertNewToken, alertFirstBuy,
+  initBot, sendAlert, alertNewToken, alertWhitelistedDeployer, alertFirstBuy,
   alertLiquidityAdded, alertUSDCPair, alertLiquidityWarning,
   alertLiquidityRemoved, alertPriceMilestone,
   alertStartup, shortAddr, formatNumber,
